@@ -81,9 +81,18 @@ class VolumeBar(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setFixedSize(110, 8); self.value = 0; self.muted = False; self.fill = QColor("white")
+        self.fill_anim = QPropertyAnimation(self, b"shown", self); self.fill_anim.setDuration(1100); self.fill_anim.setEasingCurve(QEasingCurve.Type.OutCubic)
 
     def set_value(self, value, muted, fill):
-        self.value = value; self.muted = muted; self.fill = QColor(fill); self.update()
+        self.fill_anim.stop(); self.value = value; self.muted = muted; self.fill = QColor(fill); self.update()
+
+    def get_shown(self): return self.value
+    def set_shown(self, v): self.value = v; self.update()
+    shown = pyqtProperty(float, get_shown, set_shown)
+
+    def fill_to(self, value, fill):
+        self.fill_anim.stop(); self.muted = False; self.fill = QColor(fill); self.value = 0
+        self.fill_anim.setStartValue(0.0); self.fill_anim.setEndValue(float(value)); self.fill_anim.start()
 
     def paintEvent(self, e):
         p = QPainter(self); p.setRenderHint(QPainter.RenderHint.Antialiasing); p.setPen(Qt.PenStyle.NoPen)
@@ -245,7 +254,7 @@ class DynamicIsland(QWidget):
         self.shine_anim.setDuration(1800)
         self.shine_anim.setEasingCurve(QEasingCurve.Type.OutQuad)
         
-        self.charging_phase = 0.0
+        self.charging_phase = 0.0; self.charge_samples = []
         self.charging_anim = QPropertyAnimation(self, b"charging_phase")
         self.charging_anim.setDuration(3000)
         self.charging_anim.setEasingCurve(QEasingCurve.Type.InOutSine)
@@ -868,7 +877,12 @@ class DynamicIsland(QWidget):
             if battery:
                 is_plugged = battery.power_plugged
                 if is_plugged and not self.last_power_plugged:
+                    self.charge_samples = []
                     self.trigger_charging_anim()
+                if is_plugged:
+                    now = time.time()
+                    if not self.charge_samples or self.charge_samples[-1][1] != battery.percent: self.charge_samples.append((now, battery.percent)); del self.charge_samples[:-20]
+                else: self.charge_samples = []
                 self.last_power_plugged = is_plugged
         except: pass
 
@@ -885,6 +899,34 @@ class DynamicIsland(QWidget):
         self.is_charging = False
         self.charging_phase = 0.0
         self.execute_liquid_transition()
+        QTimer.singleShot(900, self.show_charge_popup)
+
+    def battery_eta(self, pct):
+        class SBS(ctypes.Structure):
+            _fields_ = [('AcOnLine', ctypes.c_ubyte), ('BatteryPresent', ctypes.c_ubyte), ('Charging', ctypes.c_ubyte), ('Discharging', ctypes.c_ubyte), ('Spare', ctypes.c_ubyte * 3), ('Tag', ctypes.c_ubyte), ('MaxCapacity', ctypes.c_uint32), ('RemainingCapacity', ctypes.c_uint32), ('Rate', ctypes.c_int32), ('EstimatedTime', ctypes.c_uint32), ('DefaultAlert1', ctypes.c_uint32), ('DefaultAlert2', ctypes.c_uint32)]
+        try:
+            s = SBS()
+            if ctypes.windll.powrprof.CallNtPowerInformation(5, None, 0, ctypes.byref(s), ctypes.sizeof(s)) == 0 and s.Charging and s.Rate > 0 and s.MaxCapacity > s.RemainingCapacity:
+                return (s.MaxCapacity - s.RemainingCapacity) / s.Rate * 3600
+        except Exception: pass
+        pts = self.charge_samples
+        if len(pts) >= 2 and pts[-1][1] > pts[0][1] and pts[-1][0] > pts[0][0]:
+            return (100 - pct) * (pts[-1][0] - pts[0][0]) / (pts[-1][1] - pts[0][1])
+        return None
+
+    def show_charge_popup(self):
+        if not self.settings.get("charge_popup", True): return
+        try: batt = psutil.sensors_battery()
+        except Exception: batt = None
+        if not batt or not batt.power_plugged: return
+        pct = int(round(batt.percent))
+        if pct >= 100: eta = "Full"
+        else:
+            sec = self.battery_eta(pct)
+            if sec is None: eta = "..."
+            else:
+                m = max(1, int(round(sec / 60))); eta = f"{m // 60}h {m % 60:02d}m" if m >= 60 else f"{m}m"
+        self.show_osd("charging", pct, eta)
 
     def apply_net_settings(self):
         self.net_monitor.enabled = bool(self.settings.get("network_alerts", True)); self.net_monitor.battery_minutes = int(self.settings.get("bt_battery_min", 15))
@@ -897,16 +939,22 @@ class DynamicIsland(QWidget):
     def show_brightness(self, pct): self.show_osd("brightness", pct, False)
 
     def show_osd(self, kind, pct, muted):
-        if not self.settings.get("volume_osd" if kind == "volume" else "brightness_osd", True) or self.alert or self.is_dialog_open or self.current_state not in ("Idle", "Notify"): return
+        if not self.settings.get({"volume": "volume_osd", "brightness": "brightness_osd"}.get(kind, "charge_popup"), True) or self.alert or self.is_dialog_open or self.current_state not in ("Idle", "Notify"): return
         was = self.volume_event is not None and self.current_state == "Notify"
         self.volume_event = (pct, muted, kind); self.key_event_on = None
         if was: self.apply_volume_view()
         elif self.current_state == "Notify": self.update_feature_view(); self.execute_liquid_transition()
         else: self.change_state("Notify")
-        self.revert_timer.start(int(self.settings.get("volume_ms", 1500)))
+        self.revert_timer.start(4500 if kind == "charging" else int(self.settings.get("volume_ms", 1500)))
 
     def apply_volume_view(self):
         pct, muted, kind = self.volume_event
+        self.vol_pct.setFixedWidth(84 if kind == "charging" else 52)
+        if kind == "charging":
+            self.status_icon.setPixmap(qta.icon('mdi.battery-charging', color='white').pixmap(18, 18)); self.status_text.setText(f"Charging {pct}%")
+            self.vol_pct.setText(f"{muted}" if muted in ("Full", "...") else f"{muted} left"); self.vol_bar.show(); self.vol_pct.show()
+            if self.vol_bar.fill_anim.state() != QAbstractAnimation.State.Running: self.vol_bar.fill_to(pct, self.theme['status_indicator']['charging_color'])
+            return
         if kind == "brightness":
             self.status_icon.setPixmap(qta.icon('mdi.brightness-5' if pct < 50 else 'mdi.brightness-7', color='white').pixmap(18, 18)); self.status_text.setText("Brightness")
             self.vol_pct.setText(f"{pct}%"); self.vol_bar.set_value(pct, False, self.accent_color); self.vol_bar.show(); self.vol_pct.show(); return
