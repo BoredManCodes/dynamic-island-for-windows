@@ -29,6 +29,8 @@ from audio_monitor import AudioMonitor
 from notification_monitor import NotificationMonitor
 from weather_monitor import WeatherMonitor
 from outlook_monitor import OutlookMonitor
+from volume_monitor import VolumeMonitor
+from brightness_monitor import BrightnessMonitor
 from PyQt6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, 
                              QLabel, QMenu, QPushButton, QGraphicsOpacityEffect, 
                              QGridLayout, QFrame, QProgressBar, QInputDialog,
@@ -73,6 +75,36 @@ class ToggleSwitch(QWidget):
         d = h - 6; x = 3 + (self.width() - d - 6) * self._pos
         p.setBrush(QColor(0, 0, 0, 40)); p.drawEllipse(QRectF(x, 4, d, d))
         p.setBrush(QColor("white")); p.drawEllipse(QRectF(x, 3, d, d))
+
+class VolumeBar(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(110, 8); self.value = 0; self.muted = False; self.fill = QColor("white")
+
+    def set_value(self, value, muted, fill):
+        self.value = value; self.muted = muted; self.fill = QColor(fill); self.update()
+
+    def paintEvent(self, e):
+        p = QPainter(self); p.setRenderHint(QPainter.RenderHint.Antialiasing); p.setPen(Qt.PenStyle.NoPen)
+        r = self.height() / 2; p.setBrush(QColor(255, 255, 255, 50)); p.drawRoundedRect(QRectF(self.rect()), r, r)
+        w = self.width() * max(0, min(100, self.value)) / 100
+        if w > 0: p.setBrush(QColor(150, 150, 150) if self.muted else self.fill); p.drawRoundedRect(QRectF(0, 0, max(w, self.height()), self.height()), r, r)
+
+class IslandMirror(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.Tool | Qt.WindowType.WindowTransparentForInput)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground); self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents); self.frame = None
+
+    def set_frame(self, pm): self.frame = pm; self.update()
+
+    def showEvent(self, event):
+        super().showEvent(event); DynamicIsland.remove_dwm_border(self)
+
+    def paintEvent(self, e):
+        if self.frame is None: return
+        p = QPainter(self); p.drawPixmap(self.rect(), self.frame)
 
 class MarqueeLabel(QLabel):
     def __init__(self, parent=None):
@@ -263,7 +295,8 @@ class DynamicIsland(QWidget):
         self.current_state = "Idle"
         self.media_state = "Idle"
         self.media_title, self.media_artist = "", ""
-        self.features = ["perf", "media", "weather", "calendar", "month", "basics"]
+        self.ALL_CARDS = ["perf", "media", "weather", "calendar", "month", "basics"]
+        self.features = list(self.ALL_CARDS)
         self.current_feature_index = 0
         self.showing_lyrics = False
         self.media_lyric_text = ""
@@ -292,7 +325,8 @@ class DynamicIsland(QWidget):
         self.tint_anim = QPropertyAnimation(self, b"alert_tint"); self.tint_anim.setDuration(400)
 
         self.outlook = {"status": "", "events": [], "tasks": [], "unread": 0}; self.outlook_alerted = set(); self.last_unread = None
-        self.load_settings()
+        self.mirrors = {}; self.mirror_timer = QTimer(self); self.mirror_timer.timeout.connect(self.refresh_mirrors)
+        self.load_settings(); self.apply_cards()
         self.setup_monitors()
         self.init_ui()
         self.setup_autostart()
@@ -305,6 +339,7 @@ class DynamicIsland(QWidget):
         
                                                                             
         self.setFixedSize(1200, 700); self.recenter_window()
+        for sig in (QApplication.instance().screenAdded, QApplication.instance().screenRemoved, QApplication.instance().primaryScreenChanged): sig.connect(lambda *_: QTimer.singleShot(500, self.recenter_window))
         
         self.anim_group = QParallelAnimationGroup()
         self.opacity_anim = QPropertyAnimation(self.content_opacity, b"opacity"); self.opacity_anim.setDuration(850); self.opacity_anim.setEasingCurve(QEasingCurve.Type.InOutSine)
@@ -692,6 +727,8 @@ class DynamicIsland(QWidget):
         self.perf_layout.addWidget(self.cpu_label); self.perf_layout.addWidget(self.ram_label)
         self.header_layout.addStretch(); self.header_layout.addWidget(self.media_controls); self.header_layout.addWidget(self.perf_widget); self.media_controls.hide(); self.perf_widget.hide()
         self.key_switch = ToggleSwitch(); self.header_layout.addWidget(self.key_switch); self.key_switch.hide()
+        self.vol_bar = VolumeBar(); self.vol_pct = QLabel(""); self.vol_pct.setObjectName("TitleLabel"); self.vol_pct.setFixedWidth(52); self.vol_pct.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.header_layout.addWidget(self.vol_bar); self.header_layout.addWidget(self.vol_pct); self.vol_bar.hide(); self.vol_pct.hide()
         
                             
         self.perf_panel = self.create_perf_panel()
@@ -731,6 +768,8 @@ class DynamicIsland(QWidget):
         self.api_server = ApiServer(self); self.api_server.alert_received.connect(self.enqueue_alert); self.api_server.dismiss_requested.connect(self.dismiss_alert); self.apply_api()
         self.audio_monitor = None; self._eq_vals = []; self.update_audio_capture()
         self.outlook_monitor = OutlookMonitor(self); self.outlook_monitor.outlook_updated.connect(self.on_outlook)
+        self.volume_event = None; self.volume_monitor = VolumeMonitor(self); self.volume_monitor.volume_changed.connect(self.show_volume); self.volume_monitor.start()
+        self.brightness_monitor = BrightnessMonitor(self); self.brightness_monitor.ddc_enabled = bool(self.settings.get("brightness_ddc", False)); self.brightness_monitor.brightness_changed.connect(self.show_brightness); self.brightness_monitor.start()
 
                                               
         loc = self.settings.get("location", "Varanasi, India")
@@ -845,7 +884,31 @@ class DynamicIsland(QWidget):
         self.charging_phase = 0.0
         self.execute_liquid_transition()
 
+    def show_volume(self, pct, muted): self.show_osd("volume", pct, muted)
+
+    def show_brightness(self, pct): self.show_osd("brightness", pct, False)
+
+    def show_osd(self, kind, pct, muted):
+        if not self.settings.get("volume_osd" if kind == "volume" else "brightness_osd", True) or self.alert or self.is_dialog_open or self.current_state not in ("Idle", "Notify"): return
+        was = self.volume_event is not None and self.current_state == "Notify"
+        self.volume_event = (pct, muted, kind); self.key_event_on = None
+        if was: self.apply_volume_view()
+        elif self.current_state == "Notify": self.update_feature_view(); self.execute_liquid_transition()
+        else: self.change_state("Notify")
+        self.revert_timer.start(int(self.settings.get("volume_ms", 1500)))
+
+    def apply_volume_view(self):
+        pct, muted, kind = self.volume_event
+        if kind == "brightness":
+            self.status_icon.setPixmap(qta.icon('mdi.brightness-5' if pct < 50 else 'mdi.brightness-7', color='white').pixmap(18, 18)); self.status_text.setText("Brightness")
+            self.vol_pct.setText(f"{pct}%"); self.vol_bar.set_value(pct, False, self.accent_color); self.vol_bar.show(); self.vol_pct.show(); return
+        icon = 'mdi.volume-off' if muted or pct == 0 else 'mdi.volume-low' if pct < 34 else 'mdi.volume-medium' if pct < 67 else 'mdi.volume-high'
+        self.status_icon.setPixmap(qta.icon(icon, color='white').pixmap(18, 18)); self.status_text.setText("Volume")
+        self.vol_pct.setText("Muted" if muted else f"{pct}%"); self.vol_bar.set_value(pct, muted, self.accent_color)
+        self.vol_bar.show(); self.vol_pct.show()
+
     def on_revert(self):
+        self.volume_event = None
         if self.alert: self.finish_alert()
         else: self.change_state("Idle")
 
@@ -862,10 +925,10 @@ class DynamicIsland(QWidget):
         elif len(self.alert_queue) < 50: self.alert_queue.append(alert)
 
     def start_alert(self, a):
-        self.alert = a
+        self.alert = a; self.volume_event = None
         if a.get("color"): self.alert_tint_color = qcolor(a["color"])
         self.set_tint(1.0 if a.get("color") else 0.0)
-        w = 420; h = self.NOTIFY_H
+        w = int(self.settings.get("alert_width", 520)); h = int(self.settings.get("alert_height", 40))
         if a["mode"] == "expand":
             self.alert_body.setText(a["text"]); self.alert_body.ensurePolished()
             h = min(300, 44 + self.alert_body.heightForWidth(w - 10) + 6) if a["text"].strip() else self.NOTIFY_H
@@ -888,7 +951,7 @@ class DynamicIsland(QWidget):
         return "#000000" if c is not None and c.lightness() > 150 else "#FFFFFF"
 
     def reset_alert_widgets(self):
-        self.key_switch.hide(); self.alert_text.hide(); self.alert_body.hide(); self.status_text.show(); self.status_text.setStyleSheet(""); self.status_icon.setStyleSheet(""); self.header_widget.setMinimumHeight(0)
+        self.key_switch.hide(); self.vol_bar.hide(); self.vol_pct.hide(); self.alert_text.hide(); self.alert_body.hide(); self.status_text.show(); self.status_text.setStyleSheet(""); self.status_icon.setStyleSheet(""); self.header_widget.setMinimumHeight(0)
 
     def show_alert_content(self):
         a = self.alert; fg = self.alert_fg(); spec = a.get("icon", "")
@@ -920,7 +983,7 @@ class DynamicIsland(QWidget):
         if self.alert:
             if not self.alert.get("transient"): self.alert_queue.insert(0, self.alert)
             self.start_alert({"title": name, "text": "ENABLED" if is_on else "DISABLED", "sticky": False, "mode": "marquee", "icon": "mdi.lightning-bolt", "duration_ms": 2500, "transient": True}); return
-        self.event_title = name; self.event_text = ("ENABLED" if is_on else "DISABLED"); self.key_event_on = is_on
+        self.event_title = name; self.event_text = ("ENABLED" if is_on else "DISABLED"); self.key_event_on = is_on; self.volume_event = None
         if self.current_state == "Notify": self.update_feature_view(); self.execute_liquid_transition()
         else: self.change_state("Notify")
         self.key_switch.set_checked(not is_on, animate=False); QTimer.singleShot(280, lambda: self.key_switch.set_checked(is_on))
@@ -932,7 +995,7 @@ class DynamicIsland(QWidget):
         if app.lower() in [a.lower() for a in self.settings.get("ignored_apps", [])]: return
         if self.alert:
             self.enqueue_alert({"title": app, "text": f"{title}: {text}" if title else text, "sticky": False, "mode": "marquee", "icon": "mdi.email"}); return
-        self.event_title = app; self.event_text = (f"{title}: {text}" if title else text); self.key_event_on = None
+        self.event_title = app; self.event_text = (f"{title}: {text}" if title else text); self.key_event_on = None; self.volume_event = None
         if self.current_state == "Notify": self.update_feature_view(); self.execute_liquid_transition()
         else: self.change_state("Notify")
         self.revert_timer.start(int(self.settings.get("notification_ms", 3500)))
@@ -1330,7 +1393,7 @@ class DynamicIsland(QWidget):
         self.update()
 
     def apply_outlook(self):
-        m = self.outlook_monitor; m.interval = max(15, int(self.settings.get("outlook_refresh_s", 60)))
+        m = self.outlook_monitor; m.interval = max(15, int(self.settings.get("outlook_refresh_s", 60))); m.excluded = set(self.settings.get("outlook_calendars_off", []))
         if self.settings.get("outlook_enabled", True):
             if m.isRunning(): m.refresh()
             else: m._is_running = True; m.start()
@@ -1439,7 +1502,7 @@ class DynamicIsland(QWidget):
     def update_media(self, state, title, artist, accent_hex):
         started = state == "Playing" and self.media_state == "Idle"
         self.media_state, self.media_title, self.media_artist = state, title, artist; self.album_accent_color = QColor(accent_hex)
-        if started and self.settings.get("music_auto_open", False) and self.current_state == "Idle" and not self.alert and not self.is_charging:
+        if started and "media" in self.features and self.settings.get("music_auto_open", False) and self.current_state == "Idle" and not self.alert and not self.is_charging:
             self.current_feature_index = self.features.index("media"); self.change_state("Hover"); self.revert_timer.start(int(self.settings.get("hover_exit_ms", 1200)) + 2500)
         if state == "Idle":
             self.showing_lyrics = False
@@ -1468,6 +1531,7 @@ class DynamicIsland(QWidget):
             self.header_widget.show(); self.update_content(); return
         if self.current_state == "Notify":
             self.perf_panel.hide(); self.perf_widget.hide(); self.media_controls.hide(); self.weather_panel.hide(); self.calendar_panel.hide(); self.month_panel.hide(); self.basics_panel.hide(); self.header_widget.show()
+            if self.volume_event is not None: self.apply_volume_view(); return
             if self.key_event_on is not None:
                 self.status_icon.setPixmap(qta.icon('mdi.keyboard-variant', color='white').pixmap(18, 18))
                 self.status_text.setText(self.event_title); self.key_switch.show(); return
@@ -1590,7 +1654,7 @@ class DynamicIsland(QWidget):
             ball.animate_to(target, opacity, scale=scale, delay=delay)
 
     def get_centered_x(self, width):
-        sr = self.screen().availableGeometry(); return sr.x() + (sr.width() // 2) - (width // 2)
+        sr = QApplication.primaryScreen().availableGeometry(); return sr.x() + (sr.width() // 2) - (width // 2)
 
     def execute_liquid_transition(self):
         self.grow_w_anim.stop(); self.grow_h_anim.stop(); self.grow_base = None
@@ -1677,12 +1741,38 @@ class DynamicIsland(QWidget):
             # Unlock size restrictions to allow full-screen expansion
             self.setMinimumSize(0, 0)
             self.setMaximumSize(16777215, 16777215)
-            sr = self.screen().availableGeometry()
+            sr = QApplication.primaryScreen().availableGeometry()
             self.setGeometry(sr)
         else:
             self.setFixedSize(1200, 700)
             top_y = 0 if self.island_style == "Notch Nook" else 10
-            self.move(self.get_centered_x(self.width()), top_y)
+            self.move(self.get_centered_x(self.width()), QApplication.primaryScreen().geometry().y() + top_y)
+        self.apply_screens()
+
+    def apply_screens(self):
+        if not hasattr(self, "mirrors"): return
+        primary = QApplication.primaryScreen()
+        want = [sc for sc in QApplication.screens() if sc is not primary] if self.settings.get("island_screens", "main") == "all" else []
+        for name in [n for n in self.mirrors if n not in [sc.name() for sc in want]]: self.mirrors.pop(name).close()
+        top_y = 0 if self.island_style == "Notch Nook" else 10
+        for sc in want:
+            m = self.mirrors.get(sc.name())
+            if m is None: m = self.mirrors[sc.name()] = IslandMirror()
+            m.setFixedSize(self.size())
+            if self.compatibility_mode: g = sc.availableGeometry(); y = g.y()
+            else: g = sc.geometry(); y = g.y() + top_y
+            m.move(g.x() + (g.width() - self.width()) // 2, y)
+            if not m.isVisible(): m.show()
+        if want and not self.mirror_timer.isActive(): self.mirror_timer.start(33)
+        elif not want: self.mirror_timer.stop()
+
+    def refresh_mirrors(self):
+        if not self.mirrors or not self.isVisible(): return
+        pm = self.grab()
+        for m in self.mirrors.values(): m.set_frame(pm)
+
+    def set_island_screens(self, mode):
+        self.settings["island_screens"] = mode; self.save_settings(); self.apply_screens()
 
     def toggle_compatibility_mode(self):
         self.compatibility_mode = not self.compatibility_mode
@@ -1791,8 +1881,25 @@ class DynamicIsland(QWidget):
     def apply_behavior(self):
         self.HOVER_DELAY = max(0, self.settings.get("hover_delay_ms", 500)) / 1000; self.HOVER_GROW = max(0, self.settings.get("hover_grow_px", 30))
 
+    def card_layout(self):
+        saved = [c for c in self.settings.get("card_order", []) if c in self.ALL_CARDS]
+        order = list(dict.fromkeys(saved + self.ALL_CARDS)); hidden = set(self.settings.get("card_hidden", []))
+        return order, hidden
+
+    def apply_cards(self):
+        order, hidden = self.card_layout()
+        vis = [c for c in order if c not in hidden] or list(order)
+        cur = self.features[self.current_feature_index] if self.current_feature_index < len(self.features) else None
+        self.features = vis
+        self.current_feature_index = vis.index(cur) if cur in vis else min(self.current_feature_index, len(vis) - 1)
+        if hasattr(self, "anim_group") and self.current_state == "Hover" and self.features[self.current_feature_index] != cur: self.execute_liquid_transition()
+
+    def set_cards(self, order, hidden):
+        self.settings["card_order"] = list(order); self.settings["card_hidden"] = list(hidden); self.save_settings(); self.apply_cards()
+
     def set_behavior(self, key, value):
         self.settings[key] = value; self.apply_behavior(); self.save_settings()
+        if key == "brightness_ddc": self.brightness_monitor.ddc_enabled = bool(value)
         if key.startswith("outlook_"): self.apply_outlook()
 
     def set_theme_values(self, changes):
@@ -1804,6 +1911,9 @@ class DynamicIsland(QWidget):
         self.perf_monitor.stop()
         self.media_monitor.stop()
         self.key_monitor.stop()
+        self.volume_monitor.stop()
+        self.brightness_monitor.stop()
+        for m in self.mirrors.values(): m.close()
         self.notif_monitor.stop()
         self.api_server.stop()
         self.weather_monitor.stop()

@@ -21,6 +21,7 @@ class OutlookMonitor(QThread):
         self.wake = threading.Event()
         self.lock = threading.Lock()
         self.pending_complete = []
+        self.calendars = []; self.excluded = set()
         self.app = None
         self.ns = None
 
@@ -70,22 +71,51 @@ class OutlookMonitor(QThread):
             except Exception as e:
                 print("OutlookMonitor complete error:", e)
 
+    def calendar_folders(self):
+        out = {}
+        def sub_calendars(parent, sn):
+            try:
+                for sub in parent.Folders:
+                    try:
+                        if int(sub.DefaultItemType) == 1: out.setdefault(f"{sn}\\{sub.Name}", sub)
+                    except Exception:
+                        continue
+            except Exception:
+                pass
+        for st in self.ns.Stores:
+            try:
+                sn = st.DisplayName
+                try:
+                    root = st.GetDefaultFolder(9); out.setdefault(f"{sn}\\{root.Name}", root); sub_calendars(root, sn)
+                except Exception:
+                    sub_calendars(st.GetRootFolder(), sn)
+            except Exception:
+                continue
+        return out
+
     def read_events(self):
-        folder = self.ns.GetDefaultFolder(9)
-        items = folder.Items; items.Sort("[Start]"); items.IncludeRecurrences = True
+        folders = self.calendar_folders(); self.calendars = list(folders)
         start = datetime.datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
         end = start + datetime.timedelta(days=self.days_ahead + 1)
         fmt = "%m/%d/%Y %H:%M"
-        found = items.Restrict(f"[Start] < '{end.strftime(fmt)}' AND [End] > '{start.strftime(fmt)}'")
         out = []
-        for it in found:
+        for key, folder in folders.items():
+            if key in self.excluded: continue
             try:
-                out.append({"subject": it.Subject or "(no title)", "start": _dt(it.Start), "end": _dt(it.End), "all_day": bool(it.AllDayEvent),
-                            "location": it.Location or "", "busy": int(it.BusyStatus), "declined": int(it.ResponseStatus) == RESPONSE_DECLINED,
-                            "private": int(it.Sensitivity) == 2, "calendar": folder.Name})
+                items = folder.Items; items.Sort("[Start]"); items.IncludeRecurrences = True
+                found = items.Restrict(f"[Start] < '{end.strftime(fmt)}' AND [End] > '{start.strftime(fmt)}'")
             except Exception:
                 continue
-            if len(out) >= 100: break
+            n = 0
+            for it in found:
+                try:
+                    out.append({"subject": it.Subject or "(no title)", "start": _dt(it.Start), "end": _dt(it.End), "all_day": bool(it.AllDayEvent),
+                                "location": it.Location or "", "busy": int(it.BusyStatus), "declined": int(it.ResponseStatus) == RESPONSE_DECLINED,
+                                "private": int(it.Sensitivity) == 2, "calendar": folder.Name})
+                except Exception:
+                    continue
+                n += 1
+                if n >= 100: break
         out.sort(key=lambda e: e["start"])
         return out
 

@@ -1,7 +1,7 @@
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QFormLayout, QTabWidget, QWidget,
                              QLabel, QPushButton, QComboBox, QSpinBox, QDoubleSpinBox, QCheckBox,
-                             QListWidget, QColorDialog, QLineEdit)
+                             QListWidget, QListWidgetItem, QColorDialog, QLineEdit)
 
 from theme import qcolor, css
 
@@ -53,6 +53,7 @@ class SettingsDialog(QDialog):
         lay = QVBoxLayout(self); tabs = QTabWidget(); lay.addWidget(tabs)
         tabs.addTab(self.page_general(), "General")
         tabs.addTab(self.page_behavior(), "Behavior")
+        tabs.addTab(self.page_cards(), "Cards")
         tabs.addTab(self.page_outlook(), "Outlook")
         tabs.addTab(self.page_indicator(), "Indicator")
         tabs.addTab(self.page_theme(), "Theme")
@@ -83,6 +84,8 @@ class SettingsDialog(QDialog):
         a.currentTextChanged.connect(isl.set_animation_style); f.addRow("Animation style", a)
         s = QComboBox(); s.addItems(["Default", "Liquid Glass", "Notch Nook"]); s.setCurrentText(isl.island_style)
         s.currentTextChanged.connect(isl.set_island_style); f.addRow("Island style", s)
+        d = QComboBox(); d.addItem("Main display only", "main"); d.addItem("All displays (mirrored, click-through)", "all")
+        d.setCurrentIndex(1 if isl.settings.get("island_screens", "main") == "all" else 0); d.currentIndexChanged.connect(lambda _: isl.set_island_screens(d.currentData())); f.addRow("Show island on", d)
         c = QCheckBox("Cover the full screen (fixes the big box)"); c.setChecked(isl.compatibility_mode)
         c.toggled.connect(lambda _: isl.toggle_compatibility_mode()); f.addRow("Compatibility mode", c)
         loc = QPushButton(isl.weather_monitor.city); loc.clicked.connect(lambda: (isl.change_location_dialog(), loc.setText(isl.weather_monitor.city)))
@@ -97,6 +100,34 @@ class SettingsDialog(QDialog):
         c = QCheckBox(text); c.setChecked(bool(self.island.settings.get(key, default)))
         c.toggled.connect(lambda v, k=key: self.island.set_behavior(k, v)); form.addRow(label, c); return c
 
+    CARD_NAMES = {"perf": "Performance", "media": "Music", "weather": "Weather", "calendar": "Calendar", "month": "Month", "basics": "Basics"}
+
+    def page_cards(self):
+        w = QWidget(); w.setObjectName("Page"); v = QVBoxLayout(w); v.setContentsMargins(14, 14, 14, 14)
+        info = QLabel("Tick a card to show it. Drag rows or use the buttons to set the scroll order."); info.setWordWrap(True); info.setStyleSheet("color: #888;"); v.addWidget(info)
+        self.card_list = QListWidget(); self.card_list.setDragDropMode(QListWidget.DragDropMode.InternalMove)
+        order, hidden = self.island.card_layout()
+        for c in order:
+            it = QListWidgetItem(self.CARD_NAMES.get(c, c)); it.setData(Qt.ItemDataRole.UserRole, c)
+            it.setFlags(it.flags() | Qt.ItemFlag.ItemIsUserCheckable); it.setCheckState(Qt.CheckState.Unchecked if c in hidden else Qt.CheckState.Checked)
+            self.card_list.addItem(it)
+        self.card_list.itemChanged.connect(self.cards_changed); self.card_list.model().rowsMoved.connect(self.cards_changed)
+        v.addWidget(self.card_list)
+        row = QHBoxLayout(); up = QPushButton("Move up"); dn = QPushButton("Move down")
+        up.clicked.connect(lambda: self.move_card(-1)); dn.clicked.connect(lambda: self.move_card(1)); row.addWidget(up); row.addWidget(dn); v.addLayout(row)
+        return w
+
+    def move_card(self, d):
+        r = self.card_list.currentRow(); n = r + d
+        if r < 0 or not 0 <= n < self.card_list.count(): return
+        it = self.card_list.takeItem(r); self.card_list.insertItem(n, it); self.card_list.setCurrentRow(n); self.cards_changed()
+
+    def cards_changed(self, item=None, *_):
+        items = [self.card_list.item(i) for i in range(self.card_list.count())]
+        if not any(i.checkState() == Qt.CheckState.Checked for i in items):
+            self.card_list.blockSignals(True); (item if isinstance(item, QListWidgetItem) else items[0]).setCheckState(Qt.CheckState.Checked); self.card_list.blockSignals(False)
+        self.island.set_cards([i.data(Qt.ItemDataRole.UserRole) for i in items], [i.data(Qt.ItemDataRole.UserRole) for i in items if i.checkState() != Qt.CheckState.Checked])
+
     def page_outlook(self):
         w, f = self.page(); isl = self.island
         self.beh_check(f, "Outlook", "Read calendar, tasks and mail from classic Outlook", "outlook_enabled", True)
@@ -105,6 +136,9 @@ class SettingsDialog(QDialog):
         self.beh_spin(f, "Refresh every", "outlook_refresh_s", 60, 15, 3600, 15, " s")
         self.beh_spin(f, "Countdown on idle island within", "outlook_countdown_min", 30, 0, 240, 5, " min")
         self.beh_spin(f, "Alert before a meeting", "outlook_alert_min", 5, 0, 60, 1, " min")
+        self.cal_list = QListWidget(); self.cal_list.setMaximumHeight(110); f.addRow("Calendars", self.cal_list)
+        self.fill_calendars(); self.cal_list.itemChanged.connect(self.calendars_changed)
+        rl = QPushButton("Reload calendar list"); rl.clicked.connect(lambda: (isl.outlook_monitor.refresh(), QTimer.singleShot(2500, self.fill_calendars))); f.addRow("", rl)
         self.beh_check(f, "Skip", "All-day events", "outlook_skip_allday", True)
         self.beh_check(f, "", "Declined meetings", "outlook_skip_declined", True)
         self.beh_check(f, "", "Events shown as Free", "outlook_skip_free", False)
@@ -119,6 +153,18 @@ class SettingsDialog(QDialog):
         self.beh_check(f, "", "Alert when new mail arrives", "outlook_mail_alert", False)
         return w
 
+    def fill_calendars(self):
+        off = set(self.island.settings.get("outlook_calendars_off", [])); keys = list(dict.fromkeys(self.island.outlook_monitor.calendars + sorted(off)))
+        self.cal_list.blockSignals(True); self.cal_list.clear()
+        for k in keys:
+            it = QListWidgetItem(k); it.setFlags(it.flags() | Qt.ItemFlag.ItemIsUserCheckable); it.setCheckState(Qt.CheckState.Unchecked if k in off else Qt.CheckState.Checked); self.cal_list.addItem(it)
+        if not keys: self.cal_list.addItem("No calendars found yet (Outlook must be running)")
+        self.cal_list.blockSignals(False)
+
+    def calendars_changed(self, *_):
+        items = [self.cal_list.item(i) for i in range(self.cal_list.count())]
+        self.island.set_behavior("outlook_calendars_off", [i.text() for i in items if i.checkState() != Qt.CheckState.Checked])
+
     def update_outlook_status(self):
         st = self.island.outlook["status"]
         self.status_lbl.setText("Connected" if st == "ok" else st or "Not connected")
@@ -130,6 +176,12 @@ class SettingsDialog(QDialog):
         self.beh_spin(f, "Grow on hover", "hover_grow_px", 30, 0, 100, 5, " px")
         self.beh_spin(f, "Collapse delay after leaving", "hover_exit_ms", 1200, 0, 5000, 100, " ms")
         self.beh_spin(f, "Notification display time", "notification_ms", 3500, 500, 15000, 250, " ms")
+        self.beh_check(f, "Volume", "Show volume changes on the island", "volume_osd", True)
+        self.beh_check(f, "Brightness", "Show brightness changes on the island", "brightness_osd", True)
+        self.beh_check(f, "", "Also watch external monitors (DDC/CI, polled every 1.5 s, may be flaky)", "brightness_ddc", False)
+        self.beh_spin(f, "Volume display time", "volume_ms", 1500, 500, 5000, 100, " ms")
+        self.beh_spin(f, "Alert popup width", "alert_width", 520, 300, 1100, 20, " px")
+        self.beh_spin(f, "Alert popup height", "alert_height", 40, 40, 120, 4, " px")
         self.beh_spin(f, "Scroll sensitivity (lower = slower)", "scroll_sensitivity", 100, 10, 400, 10, " %")
         self.beh_spin(f, "Pause after each panel switch", "scroll_cooldown_ms", 250, 0, 1500, 50, " ms")
         self.beh_check(f, "Music", "Open the music tab when playback starts", "music_auto_open", False)
