@@ -1,6 +1,7 @@
 import psutil
 from PyQt6.QtCore import QThread, pyqtSignal
 import time
+from network_monitor import iface_kind
 
 class PerfMonitor(QThread):
     metrics_updated = pyqtSignal(dict) 
@@ -12,7 +13,7 @@ class PerfMonitor(QThread):
         psutil.cpu_percent(interval=None)
 
     def run(self):
-        last_net = psutil.net_io_counters()
+        last_net = psutil.net_io_counters(pernic=True)
         last_time = time.time()
         
         while self._is_running:
@@ -20,20 +21,25 @@ class PerfMonitor(QThread):
             ram = psutil.virtual_memory().percent
             disk = psutil.disk_usage('/').percent
             
-            cur_net = psutil.net_io_counters()
+            cur_net = psutil.net_io_counters(pernic=True)
             cur_time = time.time()
             dt = cur_time - last_time
             
                               
-            down = (cur_net.bytes_recv - last_net.bytes_recv) / dt if dt > 0 else 0
-            up = (cur_net.bytes_sent - last_net.bytes_sent) / dt if dt > 0 else 0
-            
+            nics = {}
+            for n, c in cur_net.items():
+                k = iface_kind(n); l = last_net.get(n)
+                if k and l and dt > 0: nics[n] = (k, max(0, c.bytes_recv - l.bytes_recv) / dt, max(0, c.bytes_sent - l.bytes_sent) / dt)
+            phys = [v for v in nics.values() if v[0] != "vpn"]
+            down = sum(v[1] for v in phys); up = sum(v[2] for v in phys)
+
             data = {
                 "cpu": cpu,
                 "ram": ram,
                 "disk": disk,
                 "down": down,
-                "up": up
+                "up": up,
+                "nics": nics
             }
             
             self.metrics_updated.emit(data)

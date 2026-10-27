@@ -179,6 +179,8 @@ class SettingsDialog(QDialog):
         self.beh_check(f, "Volume", "Show volume changes on the island", "volume_osd", True)
         self.beh_check(f, "Brightness", "Show brightness changes on the island", "brightness_osd", True)
         self.beh_check(f, "", "Also watch external monitors (DDC/CI, polled every 1.5 s, may be flaky)", "brightness_ddc", False)
+        self.beh_check(f, "Network", "Show Wi-Fi, LAN and Bluetooth connect/disconnect alerts", "network_alerts", True)
+        self.beh_spin(f, "Bluetooth battery interval (0 = off)", "bt_battery_min", 15, 0, 120, 5, " min")
         self.beh_spin(f, "Volume display time", "volume_ms", 1500, 500, 5000, 100, " ms")
         self.beh_spin(f, "Alert popup width", "alert_width", 520, 300, 1100, 20, " px")
         self.beh_spin(f, "Alert popup height", "alert_height", 40, 40, 120, 4, " px")

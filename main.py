@@ -30,6 +30,7 @@ from notification_monitor import NotificationMonitor
 from weather_monitor import WeatherMonitor
 from outlook_monitor import OutlookMonitor
 from volume_monitor import VolumeMonitor
+from network_monitor import NetworkMonitor
 from brightness_monitor import BrightnessMonitor
 from PyQt6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, 
                              QLabel, QMenu, QPushButton, QGraphicsOpacityEffect, 
@@ -769,6 +770,7 @@ class DynamicIsland(QWidget):
         self.audio_monitor = None; self._eq_vals = []; self.update_audio_capture()
         self.outlook_monitor = OutlookMonitor(self); self.outlook_monitor.outlook_updated.connect(self.on_outlook)
         self.volume_event = None; self.volume_monitor = VolumeMonitor(self); self.volume_monitor.volume_changed.connect(self.show_volume); self.volume_monitor.start()
+        self.net_monitor = NetworkMonitor(self); self.net_monitor.event.connect(self.show_net_event); self.apply_net_settings(); self.net_monitor.start()
         self.brightness_monitor = BrightnessMonitor(self); self.brightness_monitor.ddc_enabled = bool(self.settings.get("brightness_ddc", False)); self.brightness_monitor.brightness_changed.connect(self.show_brightness); self.brightness_monitor.start()
 
                                               
@@ -883,6 +885,12 @@ class DynamicIsland(QWidget):
         self.is_charging = False
         self.charging_phase = 0.0
         self.execute_liquid_transition()
+
+    def apply_net_settings(self):
+        self.net_monitor.enabled = bool(self.settings.get("network_alerts", True)); self.net_monitor.battery_minutes = int(self.settings.get("bt_battery_min", 15))
+
+    def show_net_event(self, title, text, icon):
+        self.enqueue_alert({"title": title, "text": text, "sticky": False, "mode": "marquee", "icon": icon, "duration_ms": 3500})
 
     def show_volume(self, pct, muted): self.show_osd("volume", pct, muted)
 
@@ -1340,9 +1348,11 @@ class DynamicIsland(QWidget):
         nh = QHBoxLayout(); nico = QLabel(); nico.setPixmap(qta.icon("mdi.web", color="white").pixmap(14, 14))
         ntxt = QLabel("NETWORK"); ntxt.setStyleSheet(f"font-size: 11px; color: {css(self.theme['text']['muted'])}; font-weight: 600;")
         nh.addWidget(nico); nh.addWidget(ntxt); nh.addStretch(); nv.addLayout(nh)
-        self.net_down_L = QLabel("↓ 0 KB/s"); self.net_up_L = QLabel("↑ 0 KB/s")
+        self.net_title_L = ntxt
+        self.net_down_L = QLabel("↓ 0 KB/s"); self.net_up_L = QLabel("↑ 0 KB/s"); self.net_vpn_L = QLabel(""); self.net_vpn_L.hide()
         for lb in [self.net_down_L, self.net_up_L]: lb.setStyleSheet("font-size: 12px; font-weight: 600;")
-        nv.addWidget(self.net_down_L); nv.addWidget(self.net_up_L); r2.addLayout(nv)
+        self.net_vpn_L.setStyleSheet(f"font-size: 10px; color: {css(self.theme['text']['muted'])}; font-weight: 600;")
+        nv.addWidget(self.net_down_L); nv.addWidget(self.net_up_L); nv.addWidget(self.net_vpn_L); r2.addLayout(nv)
         l.addLayout(r2); return w
         return w
 
@@ -1498,6 +1508,11 @@ class DynamicIsland(QWidget):
             return f"{b/(1024*1024):.1f} MB/s"
             
         self.net_down_L.setText(f"↓ {fmt(down)}"); self.net_up_L.setText(f"↑ {fmt(up)}")
+        nics = data.get("nics", {}); act = max((n for n, v in nics.items() if v[0] != "vpn"), key=lambda n: nics[n][1] + nics[n][2], default=None)
+        self.net_title_L.setText(f"NETWORK · {act}" if act and nics[act][1] + nics[act][2] > 0 else "NETWORK")
+        vpns = [v for v in nics.values() if v[0] == "vpn"]
+        if vpns: self.net_vpn_L.setText(f"VPN ↓ {fmt(sum(v[1] for v in vpns))} ↑ {fmt(sum(v[2] for v in vpns))}"); self.net_vpn_L.show()
+        else: self.net_vpn_L.hide()
 
     def update_media(self, state, title, artist, accent_hex):
         started = state == "Playing" and self.media_state == "Idle"
@@ -1902,6 +1917,7 @@ class DynamicIsland(QWidget):
         if key == "hide_clock_dot": self.update_content()
         if key == "brightness_ddc": self.brightness_monitor.ddc_enabled = bool(value)
         if key.startswith("outlook_"): self.apply_outlook()
+        if key in ("network_alerts", "bt_battery_min"): self.apply_net_settings()
 
     def set_theme_values(self, changes):
         update_theme_file(changes); self.apply_theme()
@@ -1914,6 +1930,7 @@ class DynamicIsland(QWidget):
         self.key_monitor.stop()
         self.volume_monitor.stop()
         self.brightness_monitor.stop()
+        self.net_monitor.stop()
         for m in self.mirrors.values(): m.close()
         self.notif_monitor.stop()
         self.api_server.stop()
