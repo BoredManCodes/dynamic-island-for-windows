@@ -15,7 +15,8 @@ import webbrowser
 import subprocess
 
 from app_styles import get_stylesheet
-from theme import load_theme, write_default_theme, theme_path, qcolor, css
+from theme import load_theme, write_default_theme, update_theme_file, theme_path, qcolor, css
+from settings_dialog import SettingsDialog
 
 def css_hex(v):
     return qcolor(v).name()
@@ -536,7 +537,7 @@ class DynamicIsland(QWidget):
 
     def apply_theme(self):
         self.theme, self._theme_mtime = load_theme()
-        if str(self.theme['accent']).lower() != 'auto': self.accent_color = css_hex(self.theme['accent'])
+        self.accent_color = self.get_windows_accent_color() if str(self.theme['accent']).lower() == 'auto' else css_hex(self.theme['accent'])
         self.setStyleSheet(get_stylesheet(self.accent_color, self.theme))
         self.update_island_geometry(self.get_island_rect(), self.get_current_radius())
         self.update()
@@ -745,6 +746,9 @@ class DynamicIsland(QWidget):
         self.revert_timer.start(2500)
 
     def show_notification(self, app, title, text):
+        seen = self.settings.setdefault("seen_notif_apps", [])
+        if app and app not in seen: seen.append(app); del seen[:-30]; self.save_settings()
+        if app.lower() in [a.lower() for a in self.settings.get("ignored_apps", [])]: return
         self.event_title = app; self.event_text = (f"{title}: {text}" if title else text)
         if self.current_state == "Notify": self.update_feature_view(); self.execute_liquid_transition()
         else: self.change_state("Notify")
@@ -1460,36 +1464,27 @@ class DynamicIsland(QWidget):
 
     def contextMenuEvent(self, event):
         menu = QMenu(self); mn = self.theme['menu']; menu.setStyleSheet(f"QMenu {{ background-color: {css(mn['background'])}; color: {css(mn['text'])}; border: 1px solid {css(mn['border'])}; padding: 4px; border-radius: 6px; }} QMenu::item:selected {{ background-color: {self.accent_color}; }}")
-        am = menu.addMenu("Animation Style")
-        for s in ["Glow Sweep", "Fluid Blobs", "Neon Border"]:
-            a = am.addAction(s); a.setCheckable(True); a.setChecked(self.animation_style == s); a.triggered.connect(lambda _, st=s: self.set_animation_style(st))
-        sm = menu.addMenu("Island Style")
-        for s in ["Default", "Liquid Glass", "Notch Nook"]:
-            a = sm.addAction(s); a.setCheckable(True); a.setChecked(self.island_style == s); a.triggered.connect(lambda _, st=s: self.set_island_style(st))
-        
-        menu.addSeparator()
-        menu.addAction("Edit Theme (theme.json)").triggered.connect(self.open_theme_file)
-        menu.addAction("Reload Theme").triggered.connect(self.apply_theme)
-        comp_action = menu.addAction("Fix Big Box (Compatibility Mode)")
-        comp_action.setCheckable(True)
-        comp_action.setChecked(self.compatibility_mode)
-        comp_action.triggered.connect(self.toggle_compatibility_mode)
-        
-        loc_action = menu.addAction("Change Location")
-        loc_action.triggered.connect(self.change_location_dialog)
-        
-        menu.addSeparator(); qa = menu.addAction("Quit"); qa.triggered.connect(self.close); menu.exec(self.mapToGlobal(event.pos()))
+        menu.addAction("Settings").triggered.connect(self.open_settings)
+        menu.addSeparator(); menu.addAction("Exit").triggered.connect(self.close); menu.exec(self.mapToGlobal(event.pos()))
+
+    def open_settings(self):
+        if getattr(self, 'settings_dialog', None) is not None and self.settings_dialog.isVisible():
+            self.settings_dialog.raise_(); self.settings_dialog.activateWindow(); return
+        self.settings_dialog = SettingsDialog(self); self.settings_dialog.show()
+
+    def set_theme_values(self, changes):
+        update_theme_file(changes); self.apply_theme()
 
     def closeEvent(self, event):
-                                   
+        if getattr(self, 'settings_dialog', None) is not None: self.settings_dialog.close()
         self.perf_monitor.stop()
         self.media_monitor.stop()
         self.key_monitor.stop()
         self.notif_monitor.stop()
         self.weather_monitor.stop()
-        super().closeEvent(event)
+        super().closeEvent(event); QApplication.quit()
 
 if __name__ == "__main__":
-    app = QApplication(sys.argv); island = DynamicIsland(); island.show()
+    app = QApplication(sys.argv); app.setQuitOnLastWindowClosed(False); island = DynamicIsland(); island.show()
     QTimer.singleShot(100, lambda: (island.update_island_geometry(island.get_island_rect(), island.get_current_radius()), island.content_container.move(0, 0), island.update()))
     sys.exit(app.exec())

@@ -135,6 +135,28 @@ def load_theme():
     return theme, mtime
 
 
+def update_theme_file(changes):
+    """Write dotted-path overrides ({'island.radius': 30}) into theme.json, keeping other keys."""
+    path = theme_path()
+    data = {}
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            data = {}
+    if not isinstance(data, dict):
+        data = {}
+    for dotted, value in changes.items():
+        keys = dotted.split("."); d = data
+        for k in keys[:-1]:
+            if not isinstance(d.get(k), dict): d[k] = {}
+            d = d[k]
+        d[keys[-1]] = value
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=4)
+
+
 def write_default_theme():
     path = theme_path()
     if not os.path.exists(path):
