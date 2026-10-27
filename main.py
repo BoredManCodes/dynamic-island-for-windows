@@ -9,8 +9,10 @@ import qtawesome as qta
 from PyQt6.QtCore import Qt, QTimer, QRect, QRectF, QPropertyAnimation, QEasingCurve, QPoint, QParallelAnimationGroup, QPointF, QAbstractAnimation, pyqtProperty
 from PyQt6.QtGui import (QCursor, QPainter, QColor, QBrush, QPaintEvent, 
                          QLinearGradient, QRadialGradient, QConicalGradient, QAction, QPen, QPainterPath, QRegion, QPixmap)
+from api_server import ApiServer
 import json
 import os
+import re
 import webbrowser
 import subprocess
 
@@ -42,6 +44,34 @@ DEFAULT_TASKS = [
     {"name": "Gym Session", "category": "Health", "color": "#00FF80", "time": "5:30 PM"},
     {"name": "Dinner with Family", "category": "Personal", "color": "#FF5050", "time": "8:00 PM"}
 ]
+
+class MarqueeLabel(QLabel):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.full = ""; self.color = QColor("white"); self.offset = 0.0; self.pause = 0; self.gap = 40
+        self.timer = QTimer(self); self.timer.timeout.connect(self.tick)
+
+    def set_marquee(self, text, color):
+        self.full = text; self.color = QColor(color); self.offset = 0.0; self.pause = 40; self.update()
+
+    def showEvent(self, e): super().showEvent(e); self.timer.start(25)
+
+    def hideEvent(self, e): super().hideEvent(e); self.timer.stop()
+
+    def tick(self):
+        tw = self.fontMetrics().horizontalAdvance(self.full)
+        if tw <= self.width(): self.offset = 0.0; return
+        if self.pause > 0: self.pause -= 1; return
+        self.offset += 1.5
+        if self.offset >= tw + self.gap: self.offset = 0.0; self.pause = 40
+        self.update()
+
+    def paintEvent(self, e):
+        p = QPainter(self); p.setFont(self.font()); p.setPen(self.color)
+        fm = self.fontMetrics(); y = (self.height() + fm.ascent() - fm.descent()) // 2; tw = fm.horizontalAdvance(self.full)
+        if tw <= self.width(): p.drawText(0, y, self.full); return
+        p.drawText(int(-self.offset), y, self.full); p.drawText(int(-self.offset + tw + self.gap), y, self.full)
+
 
 class ControlBall(QPushButton):
     def __init__(self, parent=None):
@@ -227,8 +257,11 @@ class DynamicIsland(QWidget):
         
                                   
         self.event_title, self.event_text = "", ""
-        self.revert_timer = QTimer(self); self.revert_timer.setSingleShot(True); self.revert_timer.timeout.connect(lambda: self.change_state("Idle"))
-        
+        self.revert_timer = QTimer(self); self.revert_timer.setSingleShot(True); self.revert_timer.timeout.connect(self.on_revert)
+        self.alert = None; self.alert_queue = []; self.alert_size = (self.NOTIFY_W, self.NOTIFY_H)
+        self._alert_tint = 0.0; self.alert_tint_color = None
+        self.tint_anim = QPropertyAnimation(self, b"alert_tint"); self.tint_anim.setDuration(400)
+
         self.load_settings()
         self.setup_monitors()
         self.init_ui()
@@ -248,6 +281,11 @@ class DynamicIsland(QWidget):
         
         self.anim_group.addAnimation(self.island_w_anim); self.anim_group.addAnimation(self.island_h_anim)
         self.anim_group.addAnimation(self.opacity_anim); self.anim_group.addAnimation(self.content_pos_anim)
+
+    @pyqtProperty(float)
+    def alert_tint(self): return self._alert_tint
+    @alert_tint.setter
+    def alert_tint(self, val): self._alert_tint = val; self.update()
 
     @pyqtProperty(float)
     def weather_bg_opacity(self): return self._weather_bg_opacity
@@ -384,6 +422,9 @@ class DynamicIsland(QWidget):
         painter.setPen(Qt.PenStyle.NoPen)
         isl = self.theme['island']
         bg = qcolor(isl['background'])
+        if self._alert_tint > 0 and self.alert_tint_color is not None:
+            t = self._alert_tint; c = self.alert_tint_color
+            bg = QColor(*(int(a + (b - a) * t) for a, b in ((bg.red(), c.red()), (bg.green(), c.green()), (bg.blue(), c.blue()), (bg.alpha(), c.alpha()))))
         shadow = qcolor(isl['shadow_color']); n_sh = int(isl['shadow_layers']); a_sh = int(isl['shadow_alpha'])
 
         if is_notch:
@@ -580,6 +621,10 @@ class DynamicIsland(QWidget):
         self.status_icon.setPixmap(qta.icon('mdi.circle', color=self.accent_color).pixmap(20, 20))
         self.status_text = QLabel(""); self.status_text.setObjectName("TitleLabel")
         self.header_layout.addWidget(self.status_icon); self.header_layout.addWidget(self.status_text)
+        self.alert_text = MarqueeLabel(); self.alert_text.setObjectName("TitleLabel"); self.alert_text.setFixedHeight(28); self.alert_text.hide()
+        self.header_layout.addWidget(self.alert_text)
+        self.alert_body = QLabel(); self.alert_body.setWordWrap(True); self.alert_body.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+        self.alert_body.setContentsMargins(30, 0, 30, 12); self.alert_body.hide()
         self.media_controls = QWidget(); self.media_controls_layout = QHBoxLayout(self.media_controls); self.media_controls_layout.setContentsMargins(0, 0, 0, 0); self.media_controls_layout.setSpacing(2)
         self.btn_prev = QPushButton(icon=qta.icon('mdi.skip-previous', color='white')); self.btn_play = QPushButton(icon=qta.icon('mdi.play', color='white')); self.btn_next = QPushButton(icon=qta.icon('mdi.skip-next', color='white'))
         for b in [self.btn_prev, self.btn_play, self.btn_next]: b.setObjectName("MediaButton")
@@ -614,7 +659,8 @@ class DynamicIsland(QWidget):
         self.content_layout.addWidget(self.calendar_panel)
         self.content_layout.addWidget(self.month_panel)
         self.content_layout.addWidget(self.basics_panel)
-        
+        self.content_layout.addWidget(self.alert_body, 1)
+
         self.island_root_layout.addWidget(self.content_container); self.update_content()
         # Removed hardcoded move(15, 0) which was causing right-side clipping
         self.update_island_geometry(self.get_island_rect(), self.get_current_radius())
@@ -625,7 +671,8 @@ class DynamicIsland(QWidget):
         self.media_monitor.lyrics_updated.connect(self.update_lyrics)
         self.key_monitor = KeyLockMonitor(self); self.key_monitor.lock_changed.connect(self.show_key_event); self.key_monitor.start()
         self.notif_monitor = NotificationMonitor(self); self.notif_monitor.notification_received.connect(self.show_notification); self.notif_monitor.start()
-        
+        self.api_server = ApiServer(self); self.api_server.alert_received.connect(self.enqueue_alert); self.api_server.dismiss_requested.connect(self.dismiss_alert); self.apply_api()
+
                                               
         loc = self.settings.get("location", "Varanasi, India")
         lat = self.settings.get("lat", 25.3333)
@@ -739,7 +786,81 @@ class DynamicIsland(QWidget):
         self.charging_phase = 0.0
         self.execute_liquid_transition()
 
+    def on_revert(self):
+        if self.alert: self.finish_alert()
+        else: self.change_state("Idle")
+
+    def apply_api(self):
+        if self.settings.get("api_enabled", False): self.api_server.start(int(self.settings.get("api_port", 8765)), self.settings.get("api_token", ""))
+        else: self.api_server.stop()
+        return self.api_server.running
+
+    def set_tint(self, target):
+        self.tint_anim.stop(); self.tint_anim.setStartValue(self._alert_tint); self.tint_anim.setEndValue(target); self.tint_anim.start()
+
+    def enqueue_alert(self, alert):
+        if self.alert is None: self.start_alert(alert)
+        elif len(self.alert_queue) < 50: self.alert_queue.append(alert)
+
+    def start_alert(self, a):
+        self.alert = a
+        if a.get("color"): self.alert_tint_color = qcolor(a["color"])
+        self.set_tint(1.0 if a.get("color") else 0.0)
+        w = 420; h = self.NOTIFY_H
+        if a["mode"] == "expand":
+            self.alert_body.setText(a["text"]); self.alert_body.ensurePolished()
+            h = min(300, 44 + self.alert_body.heightForWidth(w - 10) + 6) if a["text"].strip() else self.NOTIFY_H
+        self.alert_size = (w, h)
+        if a.get("sticky"): self.revert_timer.stop()
+        else: self.revert_timer.start(int(a.get("duration_ms", self.settings.get("notification_ms", 3500))))
+        if self.current_state == "Notify": self.update_feature_view(); self.execute_liquid_transition()
+        else: self.change_state("Notify")
+
+    def finish_alert(self):
+        self.revert_timer.stop()
+        if self.alert_queue: self.start_alert(self.alert_queue.pop(0)); return
+        self.alert = None; self.set_tint(0.0); self.change_state("Idle")
+
+    def dismiss_alert(self):
+        if self.alert: self.finish_alert()
+
+    def alert_fg(self):
+        c = self.alert_tint_color if self.alert and self.alert.get("color") else None
+        return "#000000" if c is not None and c.lightness() > 150 else "#FFFFFF"
+
+    def reset_alert_widgets(self):
+        self.alert_text.hide(); self.alert_body.hide(); self.status_text.show(); self.status_text.setStyleSheet(""); self.status_icon.setStyleSheet(""); self.header_widget.setMinimumHeight(0)
+
+    def show_alert_content(self):
+        a = self.alert; fg = self.alert_fg(); spec = a.get("icon", "")
+        is_url = spec.lower().startswith(("http://", "https://")); is_qta = bool(re.fullmatch(r"[a-z0-9]+\.[\w-]+", spec, re.I))
+        pm = None
+        if is_url and a.get("icon_bytes"): pm = QPixmap(); pm.loadFromData(a["icon_bytes"])
+        elif not is_url and os.path.isfile(spec): pm = QPixmap(spec)
+        elif is_qta:
+            try: pm = qta.icon(spec, color=fg).pixmap(18, 18)
+            except Exception: pm = None
+        if pm is not None and not pm.isNull():
+            self.status_icon.setStyleSheet(""); self.status_icon.setPixmap(pm.scaled(20, 20, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+        elif spec and not is_url and not is_qta and not os.path.isfile(spec):
+            self.status_icon.setPixmap(QPixmap()); self.status_icon.setText(spec[:2]); self.status_icon.setStyleSheet(f"color: {fg};")
+        else:
+            self.status_icon.setStyleSheet(""); self.status_icon.setPixmap(qta.icon('mdi.bell', color=fg).pixmap(18, 18))
+        title, text = a["title"].strip(), a["text"].strip()
+        if a["mode"] == "expand":
+            self.alert_text.hide(); self.status_text.show(); self.header_widget.setMinimumHeight(self.NOTIFY_H)
+            self.status_text.setStyleSheet(f"color: {fg};")
+            self.status_text.setText(self.status_text.fontMetrics().elidedText(title, Qt.TextElideMode.ElideRight, self.alert_size[0] - 100))
+            self.alert_body.setStyleSheet(f"color: {fg};"); self.alert_body.setText(text); self.alert_body.setVisible(bool(text))
+        else:
+            self.status_text.hide(); self.alert_body.hide(); self.header_widget.setMinimumHeight(0)
+            self.alert_text.setFixedWidth(self.alert_size[0] - 92); self.alert_text.show()
+            self.alert_text.set_marquee(f"{title}: {text}" if title and text else (title or text), fg)
+
     def show_key_event(self, name, is_on):
+        if self.alert:
+            if not self.alert.get("transient"): self.alert_queue.insert(0, self.alert)
+            self.start_alert({"title": name, "text": "ENABLED" if is_on else "DISABLED", "sticky": False, "mode": "marquee", "icon": "mdi.lightning-bolt", "duration_ms": 2500, "transient": True}); return
         self.event_title = name; self.event_text = ("ENABLED" if is_on else "DISABLED")
         if self.current_state == "Notify": self.update_feature_view(); self.execute_liquid_transition()
         else: self.change_state("Notify")
@@ -749,6 +870,8 @@ class DynamicIsland(QWidget):
         seen = self.settings.setdefault("seen_notif_apps", [])
         if app and app not in seen: seen.append(app); del seen[:-30]; self.save_settings()
         if app.lower() in [a.lower() for a in self.settings.get("ignored_apps", [])]: return
+        if self.alert:
+            self.enqueue_alert({"title": app, "text": f"{title}: {text}" if title else text, "sticky": False, "mode": "marquee", "icon": "mdi.email"}); return
         self.event_title = app; self.event_text = (f"{title}: {text}" if title else text)
         if self.current_state == "Notify": self.update_feature_view(); self.execute_liquid_transition()
         else: self.change_state("Notify")
@@ -1170,6 +1293,10 @@ class DynamicIsland(QWidget):
             self.update_content()
 
     def update_feature_view(self):
+        if self.current_state == "Notify" and self.alert:
+            for p in (self.perf_panel, self.perf_widget, self.media_controls, self.weather_panel, self.calendar_panel, self.month_panel, self.basics_panel): p.hide()
+            self.header_widget.show(); self.show_alert_content(); return
+        self.reset_alert_widgets()
         if self.current_state == "Idle":
             self.perf_panel.hide(); self.perf_widget.hide(); self.media_controls.hide(); self.weather_panel.hide(); self.calendar_panel.hide(); self.month_panel.hide(); self.basics_panel.hide()
             self.header_widget.show(); self.update_content(); return
@@ -1298,7 +1425,7 @@ class DynamicIsland(QWidget):
                 w, h = self.LYRIC_W, self.IDLE_H
             else:
                 w, h = self.IDLE_W, self.IDLE_H
-        elif self.current_state == "Notify": w, h = self.NOTIFY_W, self.NOTIFY_H
+        elif self.current_state == "Notify": w, h = self.alert_size if self.alert else (self.NOTIFY_W, self.NOTIFY_H)
         else:
             feature = self.features[self.current_feature_index]
             if feature == "media": w, h = (self.LYRIC_W, self.MUSIC_H) if self.showing_lyrics else (self.MUSIC_W, self.MUSIC_H)
@@ -1406,6 +1533,7 @@ class DynamicIsland(QWidget):
             pass
 
     def check_mouse_position(self):
+        if self.alert and not self.is_dialog_open: self.alert_click_through(); return
         if self.current_state == "Notify" or self.is_dialog_open: return
         cursor_pos = QCursor.pos()
         rect = self.get_island_rect()
@@ -1447,6 +1575,18 @@ class DynamicIsland(QWidget):
                 if not self.revert_timer.isActive():
                     self.revert_timer.start(int(self.settings.get("hover_exit_ms", 1200)))
 
+    def alert_click_through(self):
+        rect = self.get_island_rect()
+        gr = QRect(self.mapToGlobal(QPoint(int(rect.x()), int(rect.y()))), self.mapToGlobal(QPoint(int(rect.right()), int(rect.bottom()))))
+        hwnd = int(self.winId()); ex = ctypes.windll.user32.GetWindowLongW(hwnd, -20)
+        over = gr.contains(QCursor.pos())
+        if over and ex & 0x20: ctypes.windll.user32.SetWindowLongW(hwnd, -20, ex & ~0x20)
+        elif not over and not ex & 0x20: ctypes.windll.user32.SetWindowLongW(hwnd, -20, ex | 0x20)
+
+    def mousePressEvent(self, event):
+        if self.alert and event.button() == Qt.MouseButton.LeftButton: self.finish_alert(); return
+        super().mousePressEvent(event)
+
     def start_hover_grow(self):
         if self.current_state != "Idle" or self.is_charging or self.anim_group.state() != QAbstractAnimation.State.Stopped: return
         lyrics = self.features[self.current_feature_index] == "media" and self.showing_lyrics
@@ -1487,6 +1627,7 @@ class DynamicIsland(QWidget):
         self.media_monitor.stop()
         self.key_monitor.stop()
         self.notif_monitor.stop()
+        self.api_server.stop()
         self.weather_monitor.stop()
         super().closeEvent(event); QApplication.quit()
 

@@ -1,7 +1,7 @@
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QFormLayout, QTabWidget, QWidget,
                              QLabel, QPushButton, QComboBox, QSpinBox, QDoubleSpinBox, QCheckBox,
-                             QListWidget, QColorDialog)
+                             QListWidget, QColorDialog, QLineEdit)
 
 from theme import qcolor, css
 
@@ -56,6 +56,7 @@ class SettingsDialog(QDialog):
         tabs.addTab(self.page_indicator(), "Indicator")
         tabs.addTab(self.page_theme(), "Theme")
         tabs.addTab(self.page_notifications(), "Notifications")
+        tabs.addTab(self.page_api(), "API")
 
     def page(self):
         w = QWidget(); w.setObjectName("Page"); f = QFormLayout(w); f.setContentsMargins(14, 14, 14, 14); f.setSpacing(10); return w, f
@@ -152,6 +153,31 @@ class SettingsDialog(QDialog):
         row.addWidget(self.app_input, 1); row.addWidget(add); v.addLayout(row); v.addWidget(rem)
         hint = QLabel("The dropdown lists apps that have sent a notification since you started using this page."); hint.setWordWrap(True); hint.setStyleSheet("color: #888;"); v.addWidget(hint)
         return w
+
+    def page_api(self):
+        w, f = self.page(); isl = self.island; s = isl.settings
+        self.api_on = QCheckBox("Enable local HTTP API (127.0.0.1 only)"); self.api_on.setChecked(s.get("api_enabled", False)); f.addRow(self.api_on)
+        self.api_port = QSpinBox(); self.api_port.setRange(1024, 65535); self.api_port.setValue(int(s.get("api_port", 8765))); f.addRow("Port", self.api_port)
+        self.api_token = QLineEdit(s.get("api_token", "")); self.api_token.setPlaceholderText("none (any local process can send alerts)"); f.addRow("Token", self.api_token)
+        self.api_status = QLabel(); self.api_status.setWordWrap(True)
+        apply = QPushButton("Apply"); apply.clicked.connect(self.apply_api); f.addRow(apply); f.addRow(self.api_status)
+        help = QLabel("POST /notify with Content-Type: application/json. Fields: title, text, icon (mdi.name, emoji, file path or http URL), color (#RRGGBB or rgba()), "
+                      "duration_ms, sticky (true stays until clicked), mode (marquee or expand). POST /dismiss clears the current alert. GET /health checks the server. "
+                      "With a token set, send Authorization: Bearer <token>.")
+        help.setWordWrap(True); help.setStyleSheet("color: #888;"); f.addRow(help)
+        self.show_api_status()
+        return w
+
+    def show_api_status(self):
+        srv = self.island.api_server
+        if srv.running: self.api_status.setText(f"Listening on http://127.0.0.1:{self.island.settings.get('api_port', 8765)}"); self.api_status.setStyleSheet("color: #5C5;")
+        elif srv.error: self.api_status.setText(f"Failed to start: {srv.error}"); self.api_status.setStyleSheet("color: #E55;")
+        else: self.api_status.setText("Off"); self.api_status.setStyleSheet("color: #888;")
+
+    def apply_api(self):
+        s = self.island.settings
+        s["api_enabled"] = self.api_on.isChecked(); s["api_port"] = self.api_port.value(); s["api_token"] = self.api_token.text().strip()
+        self.island.save_settings(); self.island.apply_api(); self.show_api_status()
 
     def add_ignored(self):
         name = self.app_input.currentText().strip()
