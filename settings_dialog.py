@@ -78,7 +78,7 @@ class SettingsDialog(QDialog):
 
     def page_general(self):
         w, f = self.page(); isl = self.island
-        a = QComboBox(); a.addItems(["Glow Sweep", "Fluid Blobs", "Neon Border"]); a.setCurrentText(isl.animation_style)
+        a = QComboBox(); a.addItems(["Glow Sweep", "Fluid Blobs", "Neon Border", "Equaliser"]); a.setCurrentText(isl.animation_style)
         a.currentTextChanged.connect(isl.set_animation_style); f.addRow("Animation style", a)
         s = QComboBox(); s.addItems(["Default", "Liquid Glass", "Notch Nook"]); s.setCurrentText(isl.island_style)
         s.currentTextChanged.connect(isl.set_island_style); f.addRow("Island style", s)

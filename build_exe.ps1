@@ -16,6 +16,7 @@ Write-Host "--- Starting Build Process for $AppName ---" -ForegroundColor Cyan
     --name $AppName `
     --collect-all winsdk `
     --collect-all qtawesome `
+    --collect-all soundcard `
     --hidden-import winsdk.windows.ui.notifications.management `
     $MainScript
 

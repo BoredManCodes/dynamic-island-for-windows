@@ -25,6 +25,7 @@ def css_hex(v):
 from perf_monitor import PerfMonitor
 from media_monitor import MediaMonitor
 from event_monitor import KeyLockMonitor
+from audio_monitor import AudioMonitor
 from notification_monitor import NotificationMonitor
 from weather_monitor import WeatherMonitor
 from PyQt6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, 
@@ -491,6 +492,7 @@ class DynamicIsland(QWidget):
             if self.animation_style == "Glow Sweep": self.paint_glow_sweep(painter, rect, radius)
             elif self.animation_style == "Fluid Blobs": self.paint_fluid_blobs(painter, rect, radius)
             elif self.animation_style == "Neon Border": self.paint_neon_border(painter, rect, radius)
+            elif self.animation_style == "Equaliser": self.paint_equaliser(painter, rect, radius)
         else:
             if not is_notch:
                 painter.setBrush(Qt.BrushStyle.NoBrush); painter.setPen(QPen(qcolor(self.theme['island']['border_color']), float(self.theme['island']['border_width'])))
@@ -557,6 +559,30 @@ class DynamicIsland(QWidget):
         g2 = QRadialGradient(x2, y2, rect.width() * float(an['blob_sizes'][1])); g2.setColorAt(0, QColor(glow_color).lighter(int(an['blob_secondary_lighten']))); g2.setColorAt(1, Qt.GlobalColor.transparent)
         painter.setBrush(g2); self._draw_shape(painter, rect, radius)
         painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
+
+    def paint_equaliser(self, painter, rect, radius):
+        an = self.theme['animation']; n = max(4, int(an['eq_bars']))
+        vals = self._eq_vals; slot = rect.width() / n; bw = slot * 0.6; max_h = rect.height() * float(an['eq_height'])
+        col = self.anim_color('eq_color'); top = QColor(col); top.setAlpha(int(an['eq_alpha'])); bot = QColor(col); bot.setAlpha(int(an['eq_alpha']) // 4)
+        grad = QLinearGradient(0, rect.bottom(), 0, rect.bottom() - max_h); grad.setColorAt(0, bot); grad.setColorAt(1, top)
+        painter.setBrush(grad); painter.setPen(Qt.PenStyle.NoPen)
+        for i in range(n):
+            v = vals[i * len(vals) // n] if vals else 0.0
+            h = max_h * v + 2.0
+            painter.drawRoundedRect(QRectF(rect.x() + slot * i + (slot - bw) / 2, rect.bottom() + 1 - h, bw, h), bw / 2, bw / 2)
+
+    def on_audio_levels(self, levels):
+        old = self._eq_vals
+        if not levels: self._eq_vals = [v * 0.8 for v in old]
+        elif len(old) != len(levels): self._eq_vals = list(levels)
+        else: self._eq_vals = [max(l, o * 0.82) for l, o in zip(levels, old)]
+
+    def update_audio_capture(self):
+        want = self.animation_style == "Equaliser"
+        if want and self.audio_monitor is None:
+            self.audio_monitor = AudioMonitor(int(self.theme['animation']['eq_bars']), self); self.audio_monitor.levels_updated.connect(self.on_audio_levels); self.audio_monitor.start()
+        elif not want and self.audio_monitor is not None:
+            self.audio_monitor.levels_updated.disconnect(self.on_audio_levels); self.audio_monitor.stop(); self.audio_monitor = None; self._eq_vals = []
 
     def paint_neon_border(self, painter, rect, radius):
         conical = QConicalGradient(QPointF(rect.center()), self.gradient_phase * 360)
@@ -700,6 +726,7 @@ class DynamicIsland(QWidget):
         self.key_monitor = KeyLockMonitor(self); self.key_monitor.lock_changed.connect(self.show_key_event); self.key_monitor.start()
         self.notif_monitor = NotificationMonitor(self); self.notif_monitor.notification_received.connect(self.show_notification); self.notif_monitor.start()
         self.api_server = ApiServer(self); self.api_server.alert_received.connect(self.enqueue_alert); self.api_server.dismiss_requested.connect(self.dismiss_alert); self.apply_api()
+        self.audio_monitor = None; self._eq_vals = []; self.update_audio_capture()
 
                                               
         loc = self.settings.get("location", "Varanasi, India")
@@ -1517,6 +1544,7 @@ class DynamicIsland(QWidget):
 
     def set_animation_style(self, style):
         self.animation_style = style
+        self.update_audio_capture()
         self.save_settings()
         self.update()
 
@@ -1655,6 +1683,7 @@ class DynamicIsland(QWidget):
 
     def closeEvent(self, event):
         if getattr(self, 'settings_dialog', None) is not None: self.settings_dialog.close()
+        if self.audio_monitor is not None: self.audio_monitor.stop()
         self.perf_monitor.stop()
         self.media_monitor.stop()
         self.key_monitor.stop()

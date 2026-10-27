@@ -51,6 +51,10 @@ DEFAULT_THEME = {
         "glow_alpha": 120,
         "neon_colors": ["#FF0000", "#FFFF00", "#00FF00", "#00FFFF", "#0000FF", "#FF00FF"],
         "neon_width": 2.2,
+        "eq_color": "album",
+        "eq_alpha": 170,
+        "eq_bars": 32,
+        "eq_height": 0.5,
         "shine_colors": ["#FFFFFF", "#00A0FF", "#5A00FF"],
     },
     "charging": {
