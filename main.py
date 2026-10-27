@@ -127,7 +127,7 @@ class DynamicIsland(QWidget):
         
         self.theme, self._theme_mtime = load_theme()
         self.accent_color = self.get_windows_accent_color() if str(self.theme['accent']).lower() == 'auto' else css_hex(self.theme['accent'])
-        self.album_accent_color = QColor(0, 0, 0)
+        self.album_accent_color = QColor(0, 0, 0); self.weather_icon = None
         self.gradient_phase = 0.0
         self.animation_style = "Fluid Blobs"
         self.island_style = "Default" 
@@ -866,6 +866,7 @@ class DynamicIsland(QWidget):
         l.addLayout(self.hourly_layout); return w
 
     def update_weather(self, data):
+        self.weather_icon = data.get("icon")
         self.weather_temp_label.setText(data["temp"])
         self.weather_city_label.setText(data["city"])
         self.weather_cond_label.setText(data["desc"])
@@ -1103,8 +1104,27 @@ class DynamicIsland(QWidget):
                 self.status_icon.setPixmap(qta.icon('mdi.music', color='white').pixmap(18, 18))
             else:
                 now = datetime.datetime.now(); ts = now.strftime("%I:%M %p").lstrip("0"); self.status_text.setText(f"{now.strftime('%a')}, {ts}")
-                self.status_icon.setPixmap(qta.icon('mdi.circle', color=self.accent_color).pixmap(18, 18))
+                name, color = self.status_indicator(); sz = int(self.theme['status_indicator']['size'])
+                self.status_icon.setPixmap(qta.icon(name, color=color).pixmap(sz, sz))
         self.update()
+
+    def status_indicator(self):
+        si = self.theme['status_indicator']; mode = str(si['mode']).lower()
+        dot_accent = ('mdi.circle', QColor(self.accent_color))
+        dot_album = ('mdi.circle', self.album_accent_color if self.media_state in ("Playing", "Paused") else QColor(self.accent_color))
+        if mode == "accent": return dot_accent
+        if mode == "album": return dot_album
+        if mode == "weather":
+            return (self.weather_icon, QColor("white")) if self.weather_icon else dot_accent
+        try: batt = psutil.sensors_battery()
+        except Exception: batt = None
+        if mode in ("auto", "battery") and batt:
+            pct = batt.percent
+            if batt.power_plugged: return ('mdi.lightning-bolt', qcolor(si['charging_color']))
+            if pct <= float(si['critical_percent']): return ('mdi.circle', qcolor(si['critical_color']))
+            if pct <= float(si['low_percent']): return ('mdi.circle', qcolor(si['low_color']))
+            if mode == "battery": return ('mdi.circle', qcolor(si['ok_color']))
+        return dot_album if mode == "auto" else dot_accent
 
     def update_perf(self, data):
         cpu, ram, disk = data["cpu"], data["ram"], data["disk"]

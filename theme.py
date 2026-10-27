@@ -31,6 +31,16 @@ DEFAULT_THEME = {
         "shadow_layers": 5,
         "ctrl_ghost_opacity": 0.15,
     },
+    "status_indicator": {
+        "mode": "auto",
+        "size": 18,
+        "ok_color": "#30D158",
+        "charging_color": "#30D158",
+        "low_color": "#FF9F0A",
+        "critical_color": "#FF453A",
+        "low_percent": 30,
+        "critical_percent": 15,
+    },
     "animation": {
         "phase_speed": 0.005,
         "blob_color": "album",
