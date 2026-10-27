@@ -311,7 +311,7 @@ class DynamicIsland(QWidget):
         self.current_feature_index = 0
         self.showing_lyrics = False
         self.media_lyric_text = ""
-        self.LYRIC_W = 640
+        self.LYRIC_W = 640; self.COUNTDOWN_W = 300; self.cd_active = False; self.cd_name_text = ""
         
                             
         self.basic_controls_index = 0
@@ -723,7 +723,10 @@ class DynamicIsland(QWidget):
         self.status_icon.setPixmap(qta.icon('mdi.circle', color=self.accent_color).pixmap(20, 20))
         self.status_text = QLabel(""); self.status_text.setObjectName("TitleLabel")
         self.header_layout.addWidget(self.status_icon); self.header_layout.addWidget(self.status_text)
-        self.alert_text = MarqueeLabel(); self.alert_text.setObjectName("TitleLabel"); self.alert_text.setFixedHeight(28); self.alert_text.hide()
+        self.cd_name = MarqueeLabel(); self.cd_name.setObjectName("TitleLabel"); self.cd_name.setFixedHeight(28); self.cd_name.hide()
+        self.cd_time = QLabel(""); self.cd_time.setObjectName("TitleLabel"); self.cd_time.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter); self.cd_time.hide()
+        self.header_layout.addWidget(self.cd_name, 1); self.header_layout.addWidget(self.cd_time)
+        self.alert_text =MarqueeLabel(); self.alert_text.setObjectName("TitleLabel"); self.alert_text.setFixedHeight(28); self.alert_text.hide()
         self.header_layout.addWidget(self.alert_text)
         self.alert_body = QLabel(); self.alert_body.setWordWrap(True); self.alert_body.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
         self.alert_body.setContentsMargins(30, 0, 30, 12); self.alert_body.hide()
@@ -1008,10 +1011,10 @@ class DynamicIsland(QWidget):
         return "#000000" if c is not None and c.lightness() > 150 else "#FFFFFF"
 
     def reset_alert_widgets(self):
-        self.status_icon.show(); self.key_switch.hide(); self.vol_bar.hide(); self.vol_pct.hide(); self.alert_text.hide(); self.alert_body.hide(); self.status_text.show(); self.status_text.setStyleSheet(""); self.status_icon.setStyleSheet(""); self.header_widget.setMinimumHeight(0)
+        self.status_icon.show(); self.key_switch.hide(); self.vol_bar.hide(); self.vol_pct.hide(); self.alert_text.hide(); self.alert_body.hide(); self.cd_name.hide(); self.cd_time.hide(); self.status_text.show(); self.status_text.setStyleSheet(""); self.status_icon.setStyleSheet(""); self.header_widget.setMinimumHeight(0)
 
     def show_alert_content(self):
-        a = self.alert; fg = self.alert_fg(); spec = a.get("icon", ""); self.status_icon.show()
+        a = self.alert; fg = self.alert_fg(); spec = a.get("icon", ""); self.status_icon.show(); self.cd_name.hide(); self.cd_time.hide()
         is_url = spec.lower().startswith(("http://", "https://")); is_qta = bool(re.fullmatch(r"[a-z0-9]+\.[\w-]+", spec, re.I))
         pm = None
         if is_url and a.get("icon_bytes"): pm = QPixmap(); pm.loadFromData(a["icon_bytes"])
@@ -1429,17 +1432,24 @@ class DynamicIsland(QWidget):
     def update_content(self):
         if self.current_state == "Idle":
             feature = self.features[self.current_feature_index]; self.status_icon.show()
-            if feature == "media" and self.media_state in ("Playing", "Paused"):
+            media_on = feature == "media" and self.media_state in ("Playing", "Paused")
+            cd = None if media_on else self.outlook_countdown(datetime.datetime.now())
+            self.cd_name.setVisible(bool(cd)); self.cd_time.setVisible(bool(cd)); self.status_text.setVisible(not cd)
+            if bool(cd) != self.cd_active:
+                self.cd_active = bool(cd)
+                if not self.is_charging: self.execute_liquid_transition()
+            if media_on:
                 if self.showing_lyrics and self.media_lyric_text:
                     self.status_text.setText(self.media_lyric_text)
                 else:
                     dt = self.media_title; self.status_text.setText(dt[:22] + "..." if len(dt) > 25 else dt)
                 self.status_icon.setPixmap(qta.icon('mdi.music', color='white').pixmap(18, 18))
             else:
-                now = datetime.datetime.now(); ts = now.strftime("%I:%M %p").lstrip("0"); cd = self.outlook_countdown(now)
+                now = datetime.datetime.now(); ts = now.strftime("%I:%M %p").lstrip("0")
                 unread = self.outlook["unread"] if self.settings.get("outlook_enabled", True) and self.settings.get("outlook_unread_idle", True) else 0
                 if cd:
-                    self.status_text.setText(cd); self.status_icon.setPixmap(qta.icon('mdi.calendar-clock', color=self.accent_color).pixmap(18, 18))
+                    if cd[0] != self.cd_name_text: self.cd_name_text = cd[0]; self.cd_name.set_marquee(cd[0], "white")
+                    self.cd_time.setText(cd[1]); self.status_icon.setPixmap(qta.icon('mdi.calendar-clock', color=self.accent_color).pixmap(18, 18))
                 else:
                     self.status_text.setText(f"{ts} · ✉ {unread}" if unread else f"{now.strftime('%a')}, {ts}")
                     name, color = self.status_indicator(); sz = int(self.theme['status_indicator']['size'])
@@ -1493,16 +1503,14 @@ class DynamicIsland(QWidget):
         due.sort(key=lambda t: (t["due"], -t["importance"])); return due
 
     def outlook_countdown(self, now):
-        if not self.settings.get("outlook_enabled", True): return ""
+        if not self.settings.get("outlook_enabled", True): return None
         win = int(self.settings.get("outlook_countdown_min", 30))
         for e in self.outlook_events(now):
             mins = (e["start"] - now).total_seconds() / 60
             if mins <= 0: continue
-            if mins > win: return ""
-            m = int(math.ceil(mins)); subj = e["subject"]
-            txt = f"{subj[:14]}… {m}m" if len(subj) > 15 else f"{subj} {m}m"
-            return txt
-        return ""
+            if mins > win: return None
+            return e["subject"], f"{int(math.ceil(mins))}m"
+        return None
 
     def check_outlook_alerts(self):
         mins = int(self.settings.get("outlook_alert_min", 5))
@@ -1718,6 +1726,9 @@ class DynamicIsland(QWidget):
             delay = i * 45 
             ball.animate_to(target, opacity, scale=scale, delay=delay)
 
+    def idle_w(self):
+        return self.COUNTDOWN_W if self.cd_active else self.IDLE_W
+
     def get_centered_x(self, width):
         sr = QApplication.primaryScreen().availableGeometry(); return sr.x() + (sr.width() // 2) - (width // 2)
 
@@ -1728,7 +1739,7 @@ class DynamicIsland(QWidget):
             if self.features[self.current_feature_index] == "media" and self.showing_lyrics:
                 w, h = self.LYRIC_W, self.IDLE_H
             else:
-                w, h = self.IDLE_W, self.IDLE_H
+                w, h = self.idle_w(), self.IDLE_H
         elif self.current_state == "Notify": w, h = self.alert_size if self.alert else (self.NOTIFY_W, self.NOTIFY_H)
         else:
             feature = self.features[self.current_feature_index]
@@ -1921,7 +1932,7 @@ class DynamicIsland(QWidget):
     def start_hover_grow(self):
         if self.current_state != "Idle" or self.is_charging or self.anim_group.state() != QAbstractAnimation.State.Stopped: return
         lyrics = self.features[self.current_feature_index] == "media" and self.showing_lyrics
-        self.grow_base = (self.LYRIC_W if lyrics else self.IDLE_W, self.IDLE_H)
+        self.grow_base = (self.LYRIC_W if lyrics else self.idle_w(), self.IDLE_H)
         for anim, cur, end in [(self.grow_w_anim, self._island_w, self.grow_base[0] + self.HOVER_GROW), (self.grow_h_anim, self._island_h, self.grow_base[1] + self.HOVER_GROW // 3)]:
             anim.stop(); anim.setDuration(int(self.HOVER_DELAY * 1000)); anim.setEasingCurve(QEasingCurve.Type.InOutSine)
             anim.setStartValue(cur); anim.setEndValue(end); anim.start()
