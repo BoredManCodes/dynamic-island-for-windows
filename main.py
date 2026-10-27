@@ -951,10 +951,10 @@ class DynamicIsland(QWidget):
         return "#000000" if c is not None and c.lightness() > 150 else "#FFFFFF"
 
     def reset_alert_widgets(self):
-        self.key_switch.hide(); self.vol_bar.hide(); self.vol_pct.hide(); self.alert_text.hide(); self.alert_body.hide(); self.status_text.show(); self.status_text.setStyleSheet(""); self.status_icon.setStyleSheet(""); self.header_widget.setMinimumHeight(0)
+        self.status_icon.show(); self.key_switch.hide(); self.vol_bar.hide(); self.vol_pct.hide(); self.alert_text.hide(); self.alert_body.hide(); self.status_text.show(); self.status_text.setStyleSheet(""); self.status_icon.setStyleSheet(""); self.header_widget.setMinimumHeight(0)
 
     def show_alert_content(self):
-        a = self.alert; fg = self.alert_fg(); spec = a.get("icon", "")
+        a = self.alert; fg = self.alert_fg(); spec = a.get("icon", ""); self.status_icon.show()
         is_url = spec.lower().startswith(("http://", "https://")); is_qta = bool(re.fullmatch(r"[a-z0-9]+\.[\w-]+", spec, re.I))
         pm = None
         if is_url and a.get("icon_bytes"): pm = QPixmap(); pm.loadFromData(a["icon_bytes"])
@@ -1369,7 +1369,7 @@ class DynamicIsland(QWidget):
 
     def update_content(self):
         if self.current_state == "Idle":
-            feature = self.features[self.current_feature_index]
+            feature = self.features[self.current_feature_index]; self.status_icon.show()
             if feature == "media" and self.media_state in ("Playing", "Paused"):
                 if self.showing_lyrics and self.media_lyric_text:
                     self.status_text.setText(self.media_lyric_text)
@@ -1384,7 +1384,7 @@ class DynamicIsland(QWidget):
                 else:
                     self.status_text.setText(f"{ts} · ✉ {unread}" if unread else f"{now.strftime('%a')}, {ts}")
                     name, color = self.status_indicator(); sz = int(self.theme['status_indicator']['size'])
-                    self.status_icon.setPixmap(qta.icon(name, color=color).pixmap(sz, sz))
+                    self.status_icon.setPixmap(qta.icon(name, color=color).pixmap(sz, sz)); self.status_icon.setVisible(not self.settings.get("hide_clock_dot", False))
         self.check_outlook_alerts()
         minute = datetime.datetime.now().minute
         if minute != getattr(self, "_cal_minute", None):
@@ -1899,6 +1899,7 @@ class DynamicIsland(QWidget):
 
     def set_behavior(self, key, value):
         self.settings[key] = value; self.apply_behavior(); self.save_settings()
+        if key == "hide_clock_dot": self.update_content()
         if key == "brightness_ddc": self.brightness_monitor.ddc_enabled = bool(value)
         if key.startswith("outlook_"): self.apply_outlook()
 
