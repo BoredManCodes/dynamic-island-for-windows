@@ -1,7 +1,7 @@
 {
-    "location": "Varanasi, India",
-    "lat": 25.31668,
-    "lon": 83.01041,
+    "location": "Lavington, Australia",
+    "lat": -36.03976,
+    "lon": 146.93958,
     "tasks": [
         {
             "name": "Project Sync",
@@ -22,7 +22,29 @@
             "color": "#00A0FF"
         }
     ],
-    "compatibility_mode": true,
-    "island_style": "Default",
-    "animation_style": "Fluid Blobs"
+    "compatibility_mode": false,
+    "island_style": "Notch Nook",
+    "animation_style": "Equaliser",
+    "seen_notif_apps": [
+        "Weather",
+        "Windows Security",
+        "Mozilla Firefox"
+    ],
+    "api_enabled": true,
+    "api_port": 8765,
+    "api_token": "",
+    "outlook_calendars_off": [
+        "trent@trent-buckley.com\\Calendar (This computer only)",
+        "t.buckley@tpw.com.au\\Calendar",
+        "t.buckley@tpw.com.au\\United States holidays",
+        "t.buckley@tpw.com.au\\Birthdays",
+        "t.buckley@tpw.com.au\\Store",
+        "trent.btsk@gmail.com\\Calendar (This computer only)",
+        "admin@bordertechsolutions.com.au\\Calendar (This computer only)",
+        "tenantadmin@myteamss.com.au\\Calendar",
+        "tenantadmin@myteamss.com.au\\United States holidays",
+        "tenantadmin@myteamss.com.au\\Birthdays",
+        "support@bordertechsolutions.com.au\\Calendar (This computer only)"
+    ],
+    "music_auto_open": true
 }
