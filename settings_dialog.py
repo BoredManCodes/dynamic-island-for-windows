@@ -53,6 +53,7 @@ class SettingsDialog(QDialog):
         lay = QVBoxLayout(self); tabs = QTabWidget(); lay.addWidget(tabs)
         tabs.addTab(self.page_general(), "General")
         tabs.addTab(self.page_behavior(), "Behavior")
+        tabs.addTab(self.page_outlook(), "Outlook")
         tabs.addTab(self.page_indicator(), "Indicator")
         tabs.addTab(self.page_theme(), "Theme")
         tabs.addTab(self.page_notifications(), "Notifications")
@@ -92,12 +93,46 @@ class SettingsDialog(QDialog):
         s = QSpinBox(); s.setRange(lo, hi); s.setSingleStep(step); s.setSuffix(suffix); s.setValue(int(self.island.settings.get(key, default)))
         s.valueChanged.connect(lambda v, k=key: self.island.set_behavior(k, v)); form.addRow(label, s)
 
+    def beh_check(self, form, label, text, key, default):
+        c = QCheckBox(text); c.setChecked(bool(self.island.settings.get(key, default)))
+        c.toggled.connect(lambda v, k=key: self.island.set_behavior(k, v)); form.addRow(label, c); return c
+
+    def page_outlook(self):
+        w, f = self.page(); isl = self.island
+        self.beh_check(f, "Outlook", "Read calendar, tasks and mail from classic Outlook", "outlook_enabled", True)
+        self.status_lbl = QLabel(); self.status_lbl.setWordWrap(True); self.status_lbl.setStyleSheet("color: #888;"); f.addRow("Status", self.status_lbl)
+        self.update_outlook_status()
+        self.beh_spin(f, "Refresh every", "outlook_refresh_s", 60, 15, 3600, 15, " s")
+        self.beh_spin(f, "Countdown on idle island within", "outlook_countdown_min", 30, 0, 240, 5, " min")
+        self.beh_spin(f, "Alert before a meeting", "outlook_alert_min", 5, 0, 60, 1, " min")
+        self.beh_check(f, "Skip", "All-day events", "outlook_skip_allday", True)
+        self.beh_check(f, "", "Declined meetings", "outlook_skip_declined", True)
+        self.beh_check(f, "", "Events shown as Free", "outlook_skip_free", False)
+        self.beh_check(f, "", "Out of office", "outlook_skip_oof", True)
+        self.beh_check(f, "", "Events longer than 24 hours", "outlook_skip_multiday", True)
+        self.beh_check(f, "", "Private events", "outlook_skip_private", False)
+        kw = QLineEdit(isl.settings.get("outlook_exclude_keywords", "")); kw.setPlaceholderText("comma separated, e.g. lunch, focus time")
+        kw.editingFinished.connect(lambda: isl.set_behavior("outlook_exclude_keywords", kw.text().strip())); f.addRow("Skip titles containing", kw)
+        self.beh_check(f, "Tasks", "Show Microsoft To Do tasks (click the circle to complete)", "outlook_show_tasks", True)
+        self.beh_spin(f, "Include tasks due within", "outlook_tasks_days", 0, 0, 30, 1, " days")
+        self.beh_check(f, "Mail", "Show unread count on the idle island", "outlook_unread_idle", True)
+        self.beh_check(f, "", "Alert when new mail arrives", "outlook_mail_alert", False)
+        return w
+
+    def update_outlook_status(self):
+        st = self.island.outlook["status"]
+        self.status_lbl.setText("Connected" if st == "ok" else st or "Not connected")
+        self.status_lbl.setStyleSheet("color: #5C5;" if st == "ok" else "color: #E55;" if st else "color: #888;")
+
     def page_behavior(self):
         w, f = self.page(); isl = self.island
         self.beh_spin(f, "Hover delay before expanding", "hover_delay_ms", 500, 0, 3000, 50, " ms")
         self.beh_spin(f, "Grow on hover", "hover_grow_px", 30, 0, 100, 5, " px")
         self.beh_spin(f, "Collapse delay after leaving", "hover_exit_ms", 1200, 0, 5000, 100, " ms")
         self.beh_spin(f, "Notification display time", "notification_ms", 3500, 500, 15000, 250, " ms")
+        self.beh_spin(f, "Scroll sensitivity (lower = slower)", "scroll_sensitivity", 100, 10, 400, 10, " %")
+        self.beh_spin(f, "Pause after each panel switch", "scroll_cooldown_ms", 250, 0, 1500, 50, " ms")
+        self.beh_check(f, "Music", "Open the music tab when playback starts", "music_auto_open", False)
         g = QCheckBox("Hold CTRL over the island to ghost it and click through"); g.setChecked(isl.settings.get("ctrl_ghost", True))
         g.toggled.connect(lambda v: isl.set_behavior("ctrl_ghost", v)); f.addRow("CTRL ghost", g)
         self.spin_row(f, "Ghost opacity", "island.ctrl_ghost_opacity", 0, 1, 0.05, 2)

@@ -28,6 +28,7 @@ from event_monitor import KeyLockMonitor
 from audio_monitor import AudioMonitor
 from notification_monitor import NotificationMonitor
 from weather_monitor import WeatherMonitor
+from outlook_monitor import OutlookMonitor
 from PyQt6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, 
                              QLabel, QMenu, QPushButton, QGraphicsOpacityEffect, 
                              QGridLayout, QFrame, QProgressBar, QInputDialog,
@@ -290,10 +291,12 @@ class DynamicIsland(QWidget):
         self._alert_tint = 0.0; self.alert_tint_color = None
         self.tint_anim = QPropertyAnimation(self, b"alert_tint"); self.tint_anim.setDuration(400)
 
+        self.outlook = {"status": "", "events": [], "tasks": [], "unread": 0}; self.outlook_alerted = set(); self.last_unread = None
         self.load_settings()
         self.setup_monitors()
         self.init_ui()
         self.setup_autostart()
+        self.apply_outlook()
         
         self.master_timer = QTimer(self); self.master_timer.timeout.connect(self.update_content); self.master_timer.timeout.connect(self.check_theme_reload); self.master_timer.start(1000)
         self.anim_timer = QTimer(self); self.anim_timer.timeout.connect(self.update_animation); self.anim_timer.start(16)
@@ -727,6 +730,7 @@ class DynamicIsland(QWidget):
         self.notif_monitor = NotificationMonitor(self); self.notif_monitor.notification_received.connect(self.show_notification); self.notif_monitor.start()
         self.api_server = ApiServer(self); self.api_server.alert_received.connect(self.enqueue_alert); self.api_server.dismiss_requested.connect(self.dismiss_alert); self.apply_api()
         self.audio_monitor = None; self._eq_vals = []; self.update_audio_capture()
+        self.outlook_monitor = OutlookMonitor(self); self.outlook_monitor.outlook_updated.connect(self.on_outlook)
 
                                               
         loc = self.settings.get("location", "Varanasi, India")
@@ -1074,7 +1078,7 @@ class DynamicIsland(QWidget):
         # Increased horizontal padding for a centered, narrower content look
         view_layout.setContentsMargins(25, 12, 25, 18); view_layout.setSpacing(12)
         
-        h = QHBoxLayout(); t = QLabel("Next Up"); t.setStyleSheet("font-weight: bold; font-size: 15px;")
+        h = QHBoxLayout(); t = QLabel("Next Up"); t.setStyleSheet("font-weight: bold; font-size: 15px;"); self.cal_title_label = t
         self.ev_count_label = QLabel("0 tasks"); self.ev_count_label.setStyleSheet(f"color: {css(self.theme['text']['muted'])}; font-size: 11px;")
         eb = self.create_action_button("calendar"); eb.setIcon(qta.icon("mdi.pencil", color="white")); eb.clicked.connect(self.open_task_editor)
         # Move pencil to the left to avoid overflow
@@ -1186,37 +1190,61 @@ class DynamicIsland(QWidget):
                     if si.widget(): si.widget().deleteLater()
             
         tasks = self.settings.get("tasks", DEFAULT_TASKS)
-        self.ev_count_label.setText(f"{len(tasks)} tasks")
-        
+
         # Update integrated edit list
         self.edit_list.clear()
         for t in tasks:
             item = QListWidgetItem(f"{t['name']} • {t['time']}\n{t.get('category', 'Task').upper()}")
             self.edit_list.addItem(item)
-        
+
+        use_outlook = self.settings.get("outlook_enabled", True) and self.outlook["status"] == "ok"
+        rows = []
+        if use_outlook:
+            now = datetime.datetime.now(); evs = self.outlook_events(now); due = self.outlook_due_tasks(now)
+            for e in evs:
+                live = e["start"] <= now; tm = "now" if live else e["start"].strftime("%I:%M %p").lstrip("0")
+                sub = e["location"] or f"{e['start'].strftime('%I:%M').lstrip('0')} - {e['end'].strftime('%I:%M %p').lstrip('0')}"
+                rows.append({"name": e["subject"], "sub": sub, "time": tm, "color": "#FF9F0A" if live else self.accent_color})
+            for t in due:
+                late = t["due"].date() < now.date()
+                rows.append({"name": t["subject"], "sub": t["list"], "time": "overdue" if late else "due today" if t["due"].date() == now.date() else t["due"].strftime("%a %d"), "color": "#FF5050" if late else "#00FF80", "task_id": t["id"]})
+            if not rows: rows.append({"name": "Nothing left today", "sub": "", "time": "", "color": self.accent_color})
+            bits = [f"{len(evs)} events", f"{len(due)} tasks", f"{self.outlook['unread']} unread"]
+            self.ev_count_label.setText(" · ".join(bits)); self.cal_title_label.setText("Today")
+        else:
+            rows = [{"name": t["name"], "sub": t.get("category", "Task"), "time": t.get("time", ""), "color": t.get("color", "#00A0FF")} for t in tasks]
+            self.ev_count_label.setText(f"{len(tasks)} tasks" if not self.settings.get("outlook_enabled", True) else (self.outlook["status"] or "Outlook: connecting") + f" · {len(tasks)} local tasks"); self.cal_title_label.setText("Next Up")
+
         # Rebuild view list
         shown_count = 0
-        for t in tasks[:3]: # Show only first 3 in view mode
+        for r in rows[:4]: # Show only first 4 in view mode
             shown_count += 1
             row = QHBoxLayout()
-            bar = QFrame(); bar.setFixedWidth(3); bar.setStyleSheet(f"background-color: {t.get('color', '#00A0FF')}; border-radius: 1px;")
+            if r.get("task_id"):
+                chk = QPushButton(); chk.setIcon(qta.icon("mdi.checkbox-blank-circle-outline", color=r["color"])); chk.setFixedSize(18, 18); chk.setFlat(True); chk.setCursor(Qt.CursorShape.PointingHandCursor)
+                chk.setStyleSheet("QPushButton { border: none; background: transparent; padding: 0px; }"); chk.setToolTip("Mark complete in Outlook")
+                chk.clicked.connect(lambda _, i=r["task_id"]: self.complete_outlook_task(i)); row.addWidget(chk)
+            bar = QFrame(); bar.setFixedWidth(3); bar.setStyleSheet(f"background-color: {r['color']}; border-radius: 1px;")
             det = QVBoxLayout(); det.setContentsMargins(0, 0, 0, 0); det.setSpacing(1)
-            n = QLabel(t['name']); n.setStyleSheet("font-size: 13px; font-weight: 600; padding: 0px;")
-            c = QLabel(t.get('category', 'Task')); c.setStyleSheet(f"font-size: 10px; color: {css(self.theme['text']['muted'])}; padding: 0px;")
+            n = QLabel(r['name']); n.setStyleSheet("font-size: 13px; font-weight: 600; padding: 0px;")
+            n.setText(n.fontMetrics().elidedText(r['name'], Qt.TextElideMode.ElideRight, 250))
+            c = QLabel(r['sub']); c.setStyleSheet(f"font-size: 10px; color: {css(self.theme['text']['muted'])}; padding: 0px;")
+            c.setText(c.fontMetrics().elidedText(r['sub'], Qt.TextElideMode.ElideRight, 250))
             det.addWidget(n); det.addWidget(c)
-            tm = QLabel(t.get('time', '')); tm.setStyleSheet("font-size: 11px; font-weight: 500;")
+            tm = QLabel(r['time']); tm.setStyleSheet("font-size: 11px; font-weight: 500;")
             row.addWidget(bar); row.addLayout(det); row.addStretch(); row.addWidget(tm)
             self.tasks_container_layout.addLayout(row)
-            
+
         # Calculate dynamic height for View Mode
         # Base height (Header + Margins) approx 80px, each task approx 35px for better breathing room
+        old_h = self.CALENDAR_H
         self.CALENDAR_H = 80 + (shown_count * 35)
         if shown_count == 0: self.CALENDAR_H = 105
-        
+
         if not self.is_editing_tasks:
             self.calendar_panel_widget.setFixedSize(self.CALENDAR_W, self.CALENDAR_H)
             # If we are in Hover state and looking at calendar, trigger a smooth transition to new size
-            if self.current_state == "Hover" and self.features[self.current_feature_index] == "calendar":
+            if self.current_state == "Hover" and self.features[self.current_feature_index] == "calendar" and old_h != self.CALENDAR_H:
                 self.execute_liquid_transition()
 
     def create_perf_panel(self):
@@ -1286,13 +1314,92 @@ class DynamicIsland(QWidget):
                     dt = self.media_title; self.status_text.setText(dt[:22] + "..." if len(dt) > 25 else dt)
                 self.status_icon.setPixmap(qta.icon('mdi.music', color='white').pixmap(18, 18))
             else:
-                now = datetime.datetime.now(); ts = now.strftime("%I:%M %p").lstrip("0"); self.status_text.setText(f"{now.strftime('%a')}, {ts}")
-                name, color = self.status_indicator(); sz = int(self.theme['status_indicator']['size'])
-                self.status_icon.setPixmap(qta.icon(name, color=color).pixmap(sz, sz))
+                now = datetime.datetime.now(); ts = now.strftime("%I:%M %p").lstrip("0"); cd = self.outlook_countdown(now)
+                unread = self.outlook["unread"] if self.settings.get("outlook_enabled", True) and self.settings.get("outlook_unread_idle", True) else 0
+                if cd:
+                    self.status_text.setText(cd); self.status_icon.setPixmap(qta.icon('mdi.calendar-clock', color=self.accent_color).pixmap(18, 18))
+                else:
+                    self.status_text.setText(f"{ts} · ✉ {unread}" if unread else f"{now.strftime('%a')}, {ts}")
+                    name, color = self.status_indicator(); sz = int(self.theme['status_indicator']['size'])
+                    self.status_icon.setPixmap(qta.icon(name, color=color).pixmap(sz, sz))
+        self.check_outlook_alerts()
+        minute = datetime.datetime.now().minute
+        if minute != getattr(self, "_cal_minute", None):
+            self._cal_minute = minute
+            if hasattr(self, "tasks_container_layout") and self.outlook["status"] == "ok" and not self.is_editing_tasks: self.refresh_calendar_panel()
         self.update()
 
+    def apply_outlook(self):
+        m = self.outlook_monitor; m.interval = max(15, int(self.settings.get("outlook_refresh_s", 60)))
+        if self.settings.get("outlook_enabled", True):
+            if m.isRunning(): m.refresh()
+            else: m._is_running = True; m.start()
+        else:
+            if m.isRunning(): m.stop()
+            self.outlook = {"status": "", "events": [], "tasks": [], "unread": 0}
+        self.refresh_calendar_panel(); self.update_content()
+
+    def on_outlook(self, data):
+        if not self.settings.get("outlook_enabled", True): return
+        prev, self.last_unread = self.last_unread, data["unread"]
+        self.outlook = data
+        if self.settings.get("outlook_mail_alert", False) and prev is not None and data["unread"] > prev:
+            self.enqueue_alert({"title": "Outlook", "text": f"{data['unread'] - prev} new, {data['unread']} unread", "sticky": False, "mode": "marquee", "icon": "mdi.email", "duration_ms": 3500})
+        self.refresh_calendar_panel(); self.update_content()
+
+    def outlook_events(self, now=None):
+        now = now or datetime.datetime.now(); s = self.settings
+        words = [w.strip().lower() for w in str(s.get("outlook_exclude_keywords", "")).split(",") if w.strip()]
+        out = []
+        for e in self.outlook["events"]:
+            if e["end"] <= now or e["start"].date() > now.date(): continue
+            if s.get("outlook_skip_allday", True) and e["all_day"]: continue
+            if s.get("outlook_skip_declined", True) and e["declined"]: continue
+            if s.get("outlook_skip_free", False) and e["busy"] == 0: continue
+            if s.get("outlook_skip_oof", True) and e["busy"] == 3: continue
+            if s.get("outlook_skip_multiday", True) and (e["end"] - e["start"]) > datetime.timedelta(hours=24): continue
+            if s.get("outlook_skip_private", False) and e["private"]: continue
+            if any(w in e["subject"].lower() for w in words): continue
+            out.append(e)
+        return out
+
+    def outlook_due_tasks(self, now=None):
+        now = now or datetime.datetime.now()
+        if not self.settings.get("outlook_show_tasks", True): return []
+        limit = (now + datetime.timedelta(days=int(self.settings.get("outlook_tasks_days", 0)))).date()
+        due = [t for t in self.outlook["tasks"] if t["due"] and t["due"].date() <= limit]
+        due.sort(key=lambda t: (t["due"], -t["importance"])); return due
+
+    def outlook_countdown(self, now):
+        if not self.settings.get("outlook_enabled", True): return ""
+        win = int(self.settings.get("outlook_countdown_min", 30))
+        for e in self.outlook_events(now):
+            mins = (e["start"] - now).total_seconds() / 60
+            if mins <= 0: continue
+            if mins > win: return ""
+            m = int(math.ceil(mins)); subj = e["subject"]
+            txt = f"{subj[:14]}… {m}m" if len(subj) > 15 else f"{subj} {m}m"
+            return txt
+        return ""
+
+    def check_outlook_alerts(self):
+        mins = int(self.settings.get("outlook_alert_min", 5))
+        if mins <= 0 or not self.settings.get("outlook_enabled", True): return
+        now = datetime.datetime.now()
+        for e in self.outlook_events(now):
+            left = (e["start"] - now).total_seconds() / 60
+            key = (e["subject"], e["start"])
+            if 0 < left <= mins and key not in self.outlook_alerted:
+                self.outlook_alerted.add(key)
+                self.enqueue_alert({"title": e["subject"], "text": f"in {int(math.ceil(left))} min" + (f" · {e['location']}" if e["location"] else ""), "sticky": False, "mode": "marquee", "icon": "mdi.calendar-clock", "duration_ms": 6000})
+        if len(self.outlook_alerted) > 200: self.outlook_alerted.clear()
+
+    def complete_outlook_task(self, task_id):
+        self.outlook["tasks"] = [t for t in self.outlook["tasks"] if t["id"] != task_id]
+        self.outlook_monitor.complete_task(task_id); self.refresh_calendar_panel()
+
     def status_indicator(self):
-        si = self.theme['status_indicator']; mode = str(si['mode']).lower()
+        si =self.theme['status_indicator']; mode = str(si['mode']).lower()
         dot_accent = ('mdi.circle', QColor(self.accent_color))
         dot_album = ('mdi.circle', self.album_accent_color if self.media_state in ("Playing", "Paused") else QColor(self.accent_color))
         if mode == "accent": return dot_accent
@@ -1330,7 +1437,10 @@ class DynamicIsland(QWidget):
         self.net_down_L.setText(f"↓ {fmt(down)}"); self.net_up_L.setText(f"↑ {fmt(up)}")
 
     def update_media(self, state, title, artist, accent_hex):
+        started = state == "Playing" and self.media_state == "Idle"
         self.media_state, self.media_title, self.media_artist = state, title, artist; self.album_accent_color = QColor(accent_hex)
+        if started and self.settings.get("music_auto_open", False) and self.current_state == "Idle" and not self.alert and not self.is_charging:
+            self.current_feature_index = self.features.index("media"); self.change_state("Hover"); self.revert_timer.start(int(self.settings.get("hover_exit_ms", 1200)) + 2500)
         if state == "Idle":
             self.showing_lyrics = False
             self.media_lyric_text = ""
@@ -1382,9 +1492,15 @@ class DynamicIsland(QWidget):
 
     def wheelEvent(self, event):
         if self.current_state == "Hover" and not self.is_editing_tasks:
-            delta = event.angleDelta().y()
-            self.current_feature_index = (self.current_feature_index + (1 if delta < 0 else -1)) % len(self.features)
-            self.execute_liquid_transition()
+            now = time.monotonic(); delta = event.angleDelta().y()
+            if now < getattr(self, "_scroll_block_until", 0): event.accept(); return
+            if delta * getattr(self, "_scroll_acc", 0) < 0 or now - getattr(self, "_scroll_last", 0) > 0.4: self._scroll_acc = 0
+            self._scroll_last = now; self._scroll_acc = getattr(self, "_scroll_acc", 0) + delta
+            if abs(self._scroll_acc) >= 120 / max(0.1, self.settings.get("scroll_sensitivity", 100) / 100):
+                step = 1 if self._scroll_acc < 0 else -1; self._scroll_acc = 0
+                self._scroll_block_until = now + max(0, self.settings.get("scroll_cooldown_ms", 250)) / 1000
+                self.current_feature_index = (self.current_feature_index + step) % len(self.features)
+                self.execute_liquid_transition()
         super().wheelEvent(event)
 
     def keyPressEvent(self, event):
@@ -1677,6 +1793,7 @@ class DynamicIsland(QWidget):
 
     def set_behavior(self, key, value):
         self.settings[key] = value; self.apply_behavior(); self.save_settings()
+        if key.startswith("outlook_"): self.apply_outlook()
 
     def set_theme_values(self, changes):
         update_theme_file(changes); self.apply_theme()
@@ -1690,6 +1807,7 @@ class DynamicIsland(QWidget):
         self.notif_monitor.stop()
         self.api_server.stop()
         self.weather_monitor.stop()
+        self.outlook_monitor.stop()
         super().closeEvent(event); QApplication.quit()
 
 if __name__ == "__main__":
