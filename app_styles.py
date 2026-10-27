@@ -1,101 +1,101 @@
 # app_styles.py
+from theme import css
 
-def get_stylesheet(accent_color: str = "#0078D7") -> str:
-\
-\
-\
-       
+
+def get_stylesheet(accent_color: str, theme: dict) -> str:
+    t, b = theme["text"], theme["buttons"]
     return f"""
     QWidget#IslandWidget {{
         background-color: transparent;
         border: none;
     }}
-    
+
     QLabel {{
-        color: white;
-        font-family: 'Segoe UI Variable Display', 'Segoe UI', sans-serif;
+        color: {css(t['primary'])};
+        font-family: {theme['font_family']};
     }}
-    
+
     QLabel#TitleLabel {{
-        font-size: 13px;
+        font-size: {t['title_size']}px;
         font-weight: 600;
     }}
-    
+
     QLabel#SubtitleLabel {{
-        font-size: 11px;
-        color: #A0A0A0;
+        font-size: {t['subtitle_size']}px;
+        color: {css(t['secondary'])};
     }}
-    
+
     QLabel#IconLabel {{
         background-color: transparent;
         font-size: 16px;
     }}
-    
+
     QPushButton#MediaButton {{
         background-color: transparent;
-        color: white;
+        color: {css(b['text'])};
         border-radius: 14px;
         border: none;
         width: 28px;
         height: 28px;
         padding: 2px;
     }}
-    
+
     QPushButton#MediaButton:hover {{
-        background-color: rgba(255, 255, 255, 30);
+        background-color: {css(b['media_hover'])};
     }}
-    
+
     QPushButton#MediaButton:pressed {{
-        background-color: rgba(255, 255, 255, 50);
+        background-color: {css(b['media_pressed'])};
     }}
-    
-    
+
     QLabel#PerfLabel {{
         font-size: 11px;
-        color: #CCCCCC;
+        color: {css(t['perf'])};
         font-weight: 600;
     }}
 
     QPushButton#ActionButton {{
-        background-color: rgba(255, 255, 255, 15);
-        color: white;
+        background-color: {css(b['action_bg'])};
+        color: {css(b['text'])};
         border-radius: 16px;
-        border: 1px solid rgba(255, 255, 255, 10);
+        border: 1px solid {css(b['action_border'])};
     }}
-    
+
     QPushButton#ActionButton:hover {{
-        background-color: rgba(255, 255, 255, 35);
-        border: 1px solid rgba(255, 255, 255, 40);
+        background-color: {css(b['action_bg_hover'])};
+        border: 1px solid {css(b['action_border_hover'])};
     }}
 
     QPushButton#ActionButton:pressed {{
-        background-color: rgba(255, 255, 255, 50);
+        background-color: {css(b['action_bg_pressed'])};
     }}
 
     QPushButton#ControlBall {{
-        background-color: #000000;
-        color: white;
+        background-color: {css(b['ball_bg'])};
+        color: {css(b['text'])};
         border-radius: 20px;
-        border: 1.2px solid rgba(255, 255, 255, 40);
+        border: 1.2px solid {css(b['ball_border'])};
         width: 40px;
         height: 40px;
         font-size: 20px;
     }}
 
     QPushButton#ControlBall:hover {{
-        background-color: rgba(40, 40, 40, 255);
-        border: 1.5px solid rgba(255, 255, 255, 80);
+        background-color: {css(b['ball_bg_hover'])};
+        border: 1.5px solid {css(b['ball_border_hover'])};
     }}
 
     QPushButton#NavButton {{
         background-color: transparent;
-        color: #888;
+        color: {css(b['nav'])};
         border: none;
         font-size: 16px;
         padding: 0px 5px;
     }}
 
     QPushButton#NavButton:hover {{
-        color: white;
+        color: {css(b['nav_hover'])};
     }}
+
+    {theme.get('custom_qss') or ''}
     """

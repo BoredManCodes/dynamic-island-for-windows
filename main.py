@@ -15,6 +15,10 @@ import webbrowser
 import subprocess
 
 from app_styles import get_stylesheet
+from theme import load_theme, write_default_theme, theme_path, qcolor, css
+
+def css_hex(v):
+    return qcolor(v).name()
 from perf_monitor import PerfMonitor
 from media_monitor import MediaMonitor
 from event_monitor import KeyLockMonitor
@@ -121,14 +125,15 @@ class DynamicIsland(QWidget):
         
         self.compatibility_mode = False
         
-        self.accent_color = self.get_windows_accent_color()
+        self.theme, self._theme_mtime = load_theme()
+        self.accent_color = self.get_windows_accent_color() if str(self.theme['accent']).lower() == 'auto' else css_hex(self.theme['accent'])
         self.album_accent_color = QColor(0, 0, 0)
         self.gradient_phase = 0.0
         self.animation_style = "Fluid Blobs"
         self.island_style = "Default" 
         
         self.setObjectName("IslandWidget")
-        self.setStyleSheet(get_stylesheet(self.accent_color))
+        self.setStyleSheet(get_stylesheet(self.accent_color, self.theme))
         
         self.last_power_plugged = psutil.sensors_battery().power_plugged if psutil.sensors_battery() else False
         
@@ -228,7 +233,7 @@ class DynamicIsland(QWidget):
         self.init_ui()
         self.setup_autostart()
         
-        self.master_timer = QTimer(self); self.master_timer.timeout.connect(self.update_content); self.master_timer.start(1000)
+        self.master_timer = QTimer(self); self.master_timer.timeout.connect(self.update_content); self.master_timer.timeout.connect(self.check_theme_reload); self.master_timer.start(1000)
         self.anim_timer = QTimer(self); self.anim_timer.timeout.connect(self.update_animation); self.anim_timer.start(16)
         self.HOVER_DELAY = max(0, self.settings.get("hover_delay_ms", 500)) / 1000; self.HOVER_GROW = max(0, self.settings.get("hover_grow_px", 30)); self.hover_enter_t = None
         self.hit_timer = QTimer(self); self.hit_timer.timeout.connect(self.check_mouse_position); self.hit_timer.start(25)
@@ -316,8 +321,8 @@ class DynamicIsland(QWidget):
 
     def get_current_radius(self):
         if self.island_style == "Notch Nook":
-            return min(self._island_h / 2.0, 18.0)
-        return min(self._island_h / 2.0, 30.0)
+            return min(self._island_h / 2.0, float(self.theme['island']['notch_radius']))
+        return min(self._island_h / 2.0, float(self.theme['island']['radius']))
 
     @pyqtProperty(int)
     def island_w(self): return self._island_w
@@ -337,7 +342,7 @@ class DynamicIsland(QWidget):
 
     def build_notch_path(self, rect):
         radius = self.get_current_radius()
-        scoop = min(radius * 1.4, 25.0)
+        scoop = min(radius * 1.4, float(self.theme['island']['notch_scoop']))
         path = QPainterPath()
         path.moveTo(rect.left() - scoop, rect.top())
         path.cubicTo(
@@ -376,20 +381,23 @@ class DynamicIsland(QWidget):
             self.paint_charging_ears(painter, rect, radius)
         
         painter.setPen(Qt.PenStyle.NoPen)
+        isl = self.theme['island']
+        bg = qcolor(isl['background'])
+        shadow = qcolor(isl['shadow_color']); n_sh = int(isl['shadow_layers']); a_sh = int(isl['shadow_alpha'])
 
         if is_notch:
             notch_path = self.build_notch_path(rect)
-            for i in range(5):
-                painter.setBrush(QColor(0, 0, 0, 15 - i*3))
+            for i in range(n_sh):
+                shadow.setAlpha(max(0, a_sh - i*3)); painter.setBrush(QColor(shadow))
                 shadow_rect = rect.adjusted(i, 0, -i, -i)
                 painter.drawPath(self.build_notch_path(shadow_rect))
-            painter.setBrush(QBrush(QColor(0, 0, 0)))
+            painter.setBrush(QBrush(bg))
             painter.drawPath(notch_path)
         else:
-            for i in range(5): 
-                painter.setBrush(QColor(0, 0, 0, 15 - i*3))
+            for i in range(n_sh):
+                shadow.setAlpha(max(0, a_sh - i*3)); painter.setBrush(QColor(shadow))
                 painter.drawRoundedRect(rect.adjusted(i, i, -i, -i), radius, radius)
-            painter.setBrush(QBrush(QColor(0, 0, 0))); painter.drawRoundedRect(rect, radius, radius)
+            painter.setBrush(QBrush(bg)); painter.drawRoundedRect(rect, radius, radius)
 
         if self._weather_bg_opacity > 0.0:
             self.paint_weather_bg(painter, rect, radius)
@@ -416,7 +424,7 @@ class DynamicIsland(QWidget):
             elif self.animation_style == "Neon Border": self.paint_neon_border(painter, rect, radius)
         else:
             if not is_notch:
-                painter.setBrush(Qt.BrushStyle.NoBrush); painter.setPen(QPen(QColor(255, 255, 255, 30), 1.2))
+                painter.setBrush(Qt.BrushStyle.NoBrush); painter.setPen(QPen(qcolor(self.theme['island']['border_color']), float(self.theme['island']['border_width'])))
                 painter.drawRoundedRect(p_rect, radius, radius)
 
         if self.shine_phase > 0.0 and self.shine_phase < 1.0:
@@ -451,9 +459,11 @@ class DynamicIsland(QWidget):
             painter.scale(2.5, 0.8) 
             grad = QRadialGradient(QPointF(0, 0), W / 2)
             alpha = int(base_alpha * (1.0 - i * 0.3))
-            grad.setColorAt(0.0, QColor(255, 255, 255, alpha))
-            grad.setColorAt(0.3, QColor(0, 160, 255, int(alpha * 0.6)))
-            grad.setColorAt(0.6, QColor(90, 0, 255, int(alpha * 0.15)))
+            sc0, sc1, sc2 = (qcolor(c) for c in (self.theme['animation']['shine_colors'] + ["#FFFFFF"] * 3)[:3])
+            for c_, a_ in ((sc0, alpha), (sc1, int(alpha * 0.6)), (sc2, int(alpha * 0.15))): c_.setAlpha(a_)
+            grad.setColorAt(0.0, sc0)
+            grad.setColorAt(0.3, sc1)
+            grad.setColorAt(0.6, sc2)
             grad.setColorAt(1.0, QColor(0, 0, 0, 0))
             painter.setBrush(grad); painter.setPen(Qt.PenStyle.NoPen)
             painter.drawEllipse(QPointF(0, 0), W / 2, W / 2)
@@ -462,7 +472,7 @@ class DynamicIsland(QWidget):
 
     def paint_glow_sweep(self, painter, rect, radius):
         from PyQt6.QtGui import QTransform
-        glow = QColor(self.album_accent_color); glow.setAlpha(120)
+        glow = self.anim_color('glow_color'); glow.setAlpha(int(self.theme['animation']['glow_alpha']))
         gradient = QLinearGradient(0, 0, rect.width(), 0); gradient.setSpread(QLinearGradient.Spread.RepeatSpread)
         gradient.setColorAt(0.0, Qt.GlobalColor.transparent); gradient.setColorAt(0.5, glow); gradient.setColorAt(1.0, Qt.GlobalColor.transparent)
         brush = QBrush(gradient); transform = QTransform(); transform.translate(self.gradient_phase * rect.width() * 2, 0); brush.setTransform(transform)
@@ -470,22 +480,23 @@ class DynamicIsland(QWidget):
 
     def paint_fluid_blobs(self, painter, rect, radius):
         painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Screen)
-        glow_color = QColor(self.album_accent_color); glow_color.setAlpha(100); p = self.gradient_phase * 2 * math.pi
+        an = self.theme['animation']; glow_color = self.anim_color('blob_color'); glow_color.setAlpha(int(an['blob_alpha'])); p = self.gradient_phase * 2 * math.pi
         x1, y1 = rect.width() * (0.2 + 0.15 * math.sin(p)), rect.height() * (0.5 + 0.25 * math.cos(p))
-        g1 = QRadialGradient(x1, y1, rect.width() * 0.45); g1.setColorAt(0, glow_color); g1.setColorAt(1, Qt.GlobalColor.transparent)
+        g1 = QRadialGradient(x1, y1, rect.width() * float(an['blob_sizes'][0])); g1.setColorAt(0, glow_color); g1.setColorAt(1, Qt.GlobalColor.transparent)
         painter.setBrush(g1); self._draw_shape(painter, rect, radius)
         x2, y2 = rect.width() * (0.8 + 0.15 * math.cos(p * 0.7)), rect.height() * (0.5 + 0.25 * math.sin(p * 1.2))
-        g2 = QRadialGradient(x2, y2, rect.width() * 0.35); g2.setColorAt(0, QColor(glow_color).lighter(125)); g2.setColorAt(1, Qt.GlobalColor.transparent)
+        g2 = QRadialGradient(x2, y2, rect.width() * float(an['blob_sizes'][1])); g2.setColorAt(0, QColor(glow_color).lighter(int(an['blob_secondary_lighten']))); g2.setColorAt(1, Qt.GlobalColor.transparent)
         painter.setBrush(g2); self._draw_shape(painter, rect, radius)
         painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
 
     def paint_neon_border(self, painter, rect, radius):
         conical = QConicalGradient(QPointF(rect.center()), self.gradient_phase * 360)
-        for i, c in enumerate(["#F00", "#FF0", "#0F0", "#0FF", "#00F", "#F0F", "#F00"]): conical.setColorAt(i/6.0, QColor(c))
-        painter.setBrush(Qt.BrushStyle.NoBrush); painter.setPen(QPen(QBrush(conical), 2.2))
+        cols = list(self.theme['animation']['neon_colors']); cols = cols + [cols[0]] if cols else ["#FFFFFF", "#FFFFFF"]
+        for i, c in enumerate(cols): conical.setColorAt(i/(len(cols)-1), qcolor(c))
+        painter.setBrush(Qt.BrushStyle.NoBrush); painter.setPen(QPen(QBrush(conical), float(self.theme['animation']['neon_width'])))
         if self.island_style == "Notch Nook":
             border = QPainterPath()
-            r = radius; sc = min(r * 1.4, 25.0); pr = rect.adjusted(1,1,-1,-1)
+            r = radius; sc = min(r * 1.4, float(self.theme['island']['notch_scoop'])); pr = rect.adjusted(1,1,-1,-1)
             border.moveTo(pr.left() - sc, pr.top())
             border.cubicTo(pr.left() - sc * 0.05, pr.top(), pr.left(), pr.top() + sc * 0.05, pr.left(), pr.top() + sc)
             border.lineTo(pr.left(), pr.bottom() - r)
@@ -499,12 +510,39 @@ class DynamicIsland(QWidget):
             painter.drawRoundedRect(rect.adjusted(1,1,-1,-1), radius, radius)
 
     def update_animation(self):
-        self.gradient_phase = (self.gradient_phase + 0.005) % 1.0
+        self.gradient_phase = (self.gradient_phase + float(self.theme['animation']['phase_speed'])) % 1.0
         self.weather_bg_phase = (self.weather_bg_phase + 0.003) % 1.0
         if self.current_state in ("Hover", "Notify") or self.media_state in ("Playing", "Paused") or\
            self._weather_bg_opacity > 0.0 or self._perf_bg_opacity > 0.0 or\
            self._calendar_bg_opacity > 0.0 or self._month_bg_opacity > 0.0: 
             self.update()
+
+    def anim_color(self, key):
+        v = self.theme['animation'][key]
+        return QColor(self.album_accent_color) if str(v).lower() == 'album' else qcolor(v)
+
+    def beam_colors(self, alpha):
+        cs = [qcolor(c) for c in (self.theme['charging']['beam_colors'] + ["#FFFFFF"] * 3)[:3]]
+        cs[0].setAlpha(alpha); cs[1].setAlpha(alpha); cs[2].setAlpha(alpha // 2)
+        return cs
+
+    def check_theme_reload(self):
+        try:
+            m = os.path.getmtime(theme_path())
+        except OSError:
+            return
+        if m != self._theme_mtime:
+            self.apply_theme()
+
+    def apply_theme(self):
+        self.theme, self._theme_mtime = load_theme()
+        if str(self.theme['accent']).lower() != 'auto': self.accent_color = css_hex(self.theme['accent'])
+        self.setStyleSheet(get_stylesheet(self.accent_color, self.theme))
+        self.update_island_geometry(self.get_island_rect(), self.get_current_radius())
+        self.update()
+
+    def open_theme_file(self):
+        os.startfile(write_default_theme())
 
     def get_windows_accent_color(self):
         try:
@@ -632,7 +670,7 @@ class DynamicIsland(QWidget):
             alpha = int(70 * opacity / (i + 1))
             glow_grad = QRadialGradient(rect.center(), rect.width() / 1.5)
                                                          
-            color = QColor(0, 255, 255, alpha) if i % 2 == 0 else QColor(140, 0, 255, alpha)
+            gc = self.theme['charging']['glow_colors']; color = qcolor(gc[i % 2 if len(gc) > 1 else 0]); color.setAlpha(alpha)
             painter.setPen(QPen(color, 12 + i*8, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
             painter.drawPath(glow_path)
 
@@ -647,10 +685,9 @@ class DynamicIsland(QWidget):
             if beam_w <= 0: continue
             alpha = int(180 * opacity / (i + 1))
             r_beam_grad = QLinearGradient(right_edge, centerY, right_edge + beam_len, centerY)
-            r_beam_grad.setColorAt(0.0, QColor(255, 255, 255, alpha))
-            r_beam_grad.setColorAt(0.1, QColor(0, 240, 255, alpha))
-            r_beam_grad.setColorAt(0.5, QColor(160, 0, 255, alpha // 2))
-            r_beam_grad.setColorAt(1.0, QColor(0, 0, 0, 0))
+            bc = self.beam_colors(alpha)
+            r_beam_grad.setColorAt(0.0, bc[0]); r_beam_grad.setColorAt(0.1, bc[1])
+            r_beam_grad.setColorAt(0.5, bc[2]); r_beam_grad.setColorAt(1.0, QColor(0, 0, 0, 0))
             
             painter.setPen(QPen(QBrush(r_beam_grad), beam_w + 1, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
             painter.setBrush(Qt.BrushStyle.NoBrush)
@@ -662,16 +699,15 @@ class DynamicIsland(QWidget):
             if beam_w <= 0: continue
             alpha = int(180 * opacity / (i + 1))
             l_beam_grad = QLinearGradient(left_edge, centerY, left_edge - beam_len, centerY)
-            l_beam_grad.setColorAt(0.0, QColor(255, 255, 255, alpha))
-            l_beam_grad.setColorAt(0.1, QColor(0, 240, 255, alpha))
-            l_beam_grad.setColorAt(0.5, QColor(160, 0, 255, alpha // 2))
-            l_beam_grad.setColorAt(1.0, QColor(0, 0, 0, 0))
+            bc = self.beam_colors(alpha)
+            l_beam_grad.setColorAt(0.0, bc[0]); l_beam_grad.setColorAt(0.1, bc[1])
+            l_beam_grad.setColorAt(0.5, bc[2]); l_beam_grad.setColorAt(1.0, QColor(0, 0, 0, 0))
             
             painter.setPen(QPen(QBrush(l_beam_grad), beam_w + 1, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
             painter.drawLine(QPointF(left_edge, centerY), QPointF(left_edge - beam_len, centerY))
 
                                       
-        painter.setBrush(QColor(255, 255, 255, int(255 * opacity)))
+        dot = qcolor(self.theme['charging']['dot_color']); dot.setAlpha(int(255 * opacity)); painter.setBrush(dot)
         painter.setPen(Qt.PenStyle.NoPen)
         painter.drawEllipse(QPointF(right_edge, centerY), 4, 3)
         painter.drawEllipse(QPointF(left_edge, centerY), 4, 3)
@@ -715,85 +751,85 @@ class DynamicIsland(QWidget):
         self.revert_timer.start(3500)
 
     def paint_weather_bg(self, painter, rect, radius):
-        painter.save()
+        painter.save(); pt = self.theme['panels']['weather']
         painter.setOpacity(self._weather_bg_opacity)
         p = self.weather_bg_phase * 2 * math.pi
         
                         
         grad = QLinearGradient(rect.topLeft(), rect.bottomLeft())
-        grad.setColorAt(0, QColor(20, 40, 100))
-        grad.setColorAt(1, QColor(10, 20, 60))
+        grad.setColorAt(0, qcolor(pt['top']))
+        grad.setColorAt(1, qcolor(pt['bottom']))
         painter.setBrush(grad); self._draw_shape(painter, rect, radius)
         
                        
         painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Screen)
-        for i, color in enumerate([QColor(60, 130, 250, 120), QColor(40, 80, 220, 100)]):
+        for i, color in enumerate([qcolor(c) for c in pt['blooms']]):
             x = rect.center().x() + math.sin(p + i) * (rect.width() * 0.3)
             y = rect.center().y() + math.cos(p * 0.7 + i*2) * (rect.height() * 0.2)
-            bloom = QRadialGradient(QPointF(x, y), rect.width() * 0.6)
+            bloom = QRadialGradient(QPointF(x, y), rect.width() * float(pt['bloom_size']))
             bloom.setColorAt(0, color); bloom.setColorAt(1, Qt.GlobalColor.transparent)
             painter.setBrush(bloom); self._draw_shape(painter, rect, radius)
         painter.restore()
 
     def paint_perf_bg(self, painter, rect, radius):
-        painter.save()
+        painter.save(); pt = self.theme['panels']['perf']
         painter.setOpacity(self._perf_bg_opacity)
         p = self.weather_bg_phase * 2 * math.pi                          
         
                                 
         grad = QLinearGradient(rect.topLeft(), rect.bottomLeft())
-        grad.setColorAt(0, QColor(0, 40, 20))
-        grad.setColorAt(1, QColor(0, 20, 10))
+        grad.setColorAt(0, qcolor(pt['top']))
+        grad.setColorAt(1, qcolor(pt['bottom']))
         painter.setBrush(grad); self._draw_shape(painter, rect, radius)
         
                             
         painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Screen)
-        for i, color in enumerate([QColor(50, 255, 50, 80), QColor(200, 255, 0, 60)]):
+        for i, color in enumerate([qcolor(c) for c in pt['blooms']]):
             x = rect.center().x() + math.sin(p * 0.8 + i*1.5) * (rect.width() * 0.35)
             y = rect.center().y() + math.cos(p * 0.5 + i) * (rect.height() * 0.25)
-            bloom = QRadialGradient(QPointF(x, y), rect.width() * 0.5)
+            bloom = QRadialGradient(QPointF(x, y), rect.width() * float(pt['bloom_size']))
             bloom.setColorAt(0, color); bloom.setColorAt(1, Qt.GlobalColor.transparent)
             painter.setBrush(bloom); self._draw_shape(painter, rect, radius)
         painter.restore()
 
     def paint_calendar_bg(self, painter, rect, radius):
-        painter.save()
+        painter.save(); pt = self.theme['panels']['calendar']
         painter.setOpacity(self._calendar_bg_opacity)
         p = self.weather_bg_phase * 2 * math.pi
         
                                
         grad = QLinearGradient(rect.topLeft(), rect.bottomLeft())
-        grad.setColorAt(0, QColor(60, 40, 0))
-        grad.setColorAt(1, QColor(30, 20, 0))
+        grad.setColorAt(0, qcolor(pt['top']))
+        grad.setColorAt(1, qcolor(pt['bottom']))
         painter.setBrush(grad); self._draw_shape(painter, rect, radius)
         
                                     
         painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Screen)
-        for i, color in enumerate([QColor(255, 180, 0, 90), QColor(255, 255, 0, 60)]):
+        for i, color in enumerate([qcolor(c) for c in pt['blooms']]):
             x = rect.center().x() + math.sin(p * 0.9 + i*2) * (rect.width() * 0.3)
             y = rect.center().y() + math.cos(p * 0.6 + i) * (rect.height() * 0.2)
-            bloom = QRadialGradient(QPointF(x, y), rect.width() * 0.55)
+            bloom = QRadialGradient(QPointF(x, y), rect.width() * float(pt['bloom_size']))
             bloom.setColorAt(0, color); bloom.setColorAt(1, Qt.GlobalColor.transparent)
             painter.setBrush(bloom); self._draw_shape(painter, rect, radius)
         painter.restore()
 
     def paint_month_bg(self, painter, rect, radius):
-        painter.save()
+        painter.save(); pt = self.theme['panels']['month']
         painter.setOpacity(self._month_bg_opacity)
         p = self.weather_bg_phase * 2 * math.pi
         
                                    
         grad = QLinearGradient(rect.topLeft(), rect.bottomLeft())
-        grad.setColorAt(0, QColor(30, 0, 50))
-        grad.setColorAt(1, QColor(15, 0, 30))
+        grad.setColorAt(0, qcolor(pt['top']))
+        grad.setColorAt(1, qcolor(pt['bottom']))
         painter.setBrush(grad); self._draw_shape(painter, rect, radius)
         
                                       
         painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Screen)
-        for i, color in enumerate([QColor(180, 0, 255, 80), QColor(255, 0, 180, 60)]):
+        for i, color in enumerate([qcolor(c) for c in pt['blooms']]):
             x = rect.center().x() + math.sin(p * 1.1 + i) * (rect.width() * 0.3)
             y = rect.center().y() + math.cos(p * 0.8 + i*1.2) * (rect.height() * 0.2)
-            bloom = QRadialGradient(QPointF(x, y), rect.width() * 0.5)
+            bloom = QRadialGradient(QPointF(x, y), rect.width() * float(pt['bloom_size']))
             bloom.setColorAt(0, color); bloom.setColorAt(1, Qt.GlobalColor.transparent)
             painter.setBrush(bloom); self._draw_shape(painter, rect, radius)
         painter.restore()
@@ -815,14 +851,14 @@ class DynamicIsland(QWidget):
         info = QVBoxLayout(); 
         loc_name = self.settings.get("location", "Varanasi, India")
         self.weather_city_label = QLabel(loc_name); self.weather_city_label.setStyleSheet("font-size: 14px; font-weight: 600;")
-        self.weather_cond_label = QLabel("Loading..."); self.weather_cond_label.setStyleSheet("font-size: 11px; color: #AAA;")
+        self.weather_cond_label = QLabel("Loading..."); self.weather_cond_label.setStyleSheet(f"font-size: 11px; color: {css(self.theme['text']['dim'])};")
         info.addWidget(self.weather_city_label); info.addWidget(self.weather_cond_label); h1.addLayout(info); h1.addStretch(); h1.addWidget(self.weather_temp_label)
         l.addLayout(h1)
         self.hourly_layout = QHBoxLayout(); self.hourly_layout.setSpacing(5)
                            
         self.hourly_slots = []
         for _ in range(5):
-            slot = QVBoxLayout(); slot.setSpacing(2); st = QLabel("--"); st.setStyleSheet("font-size: 9px; color: #888;"); st.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            slot = QVBoxLayout(); slot.setSpacing(2); st = QLabel("--"); st.setStyleSheet(f"font-size: 9px; color: {css(self.theme['text']['muted'])};"); st.setAlignment(Qt.AlignmentFlag.AlignCenter)
             si = QLabel(); si.setPixmap(qta.icon("mdi.weather-cloudy", color='white').pixmap(18, 18)); si.setAlignment(Qt.AlignmentFlag.AlignCenter)
             stp = QLabel("--°"); stp.setStyleSheet("font-size: 10px; font-weight: 600;"); stp.setAlignment(Qt.AlignmentFlag.AlignCenter)
             slot.addWidget(st); slot.addWidget(si); slot.addWidget(stp); self.hourly_layout.addLayout(slot)
@@ -855,7 +891,7 @@ class DynamicIsland(QWidget):
         view_layout.setContentsMargins(25, 12, 25, 18); view_layout.setSpacing(12)
         
         h = QHBoxLayout(); t = QLabel("Next Up"); t.setStyleSheet("font-weight: bold; font-size: 15px;")
-        self.ev_count_label = QLabel("0 tasks"); self.ev_count_label.setStyleSheet("color: #888; font-size: 11px;")
+        self.ev_count_label = QLabel("0 tasks"); self.ev_count_label.setStyleSheet(f"color: {css(self.theme['text']['muted'])}; font-size: 11px;")
         eb = self.create_action_button("calendar"); eb.setIcon(qta.icon("mdi.pencil", color="white")); eb.clicked.connect(self.open_task_editor)
         # Move pencil to the left to avoid overflow
         h.addWidget(eb); h.addSpacing(5); h.addWidget(t); h.addWidget(self.ev_count_label); h.addStretch()
@@ -874,11 +910,11 @@ class DynamicIsland(QWidget):
         
         # Syncing with TaskEditorDialog's premium style but within panel
         self.edit_list = QListWidget()
-        self.edit_list.setStyleSheet(f"QListWidget {{ background: transparent; border: none; }} QListWidget::item {{ background: rgba(255,255,255,10); border-radius: 10px; padding: 10px; margin-bottom: 5px; }} QListWidget::item:selected {{ border: 1px solid {self.accent_color}; }}")
+        self.edit_list.setStyleSheet(f"QListWidget {{ background: transparent; border: none; }} QListWidget::item {{ background: {css(self.theme['inputs']['list_item_bg'])}; border-radius: 10px; padding: 10px; margin-bottom: 5px; }} QListWidget::item:selected {{ border: 1px solid {self.accent_color}; }}")
         
         # Inputs with glassmorphism styling
         input_grid = QGridLayout(); input_grid.setSpacing(10)
-        input_style = f"QLineEdit, QComboBox {{ background-color: rgba(255, 255, 255, 12); border: 1px solid rgba(255, 255, 255, 15); border-radius: 8px; color: white; padding: 10px; font-size: 13px; }} QLineEdit:focus {{ border: 1px solid {self.accent_color}; }}"
+        input_style = f"QLineEdit, QComboBox {{ background-color: {css(self.theme['inputs']['background'])}; border: 1px solid {css(self.theme['inputs']['border'])}; border-radius: {self.theme['inputs']['radius']}px; color: white; padding: 10px; font-size: 13px; }} QLineEdit:focus {{ border: 1px solid {self.accent_color}; }}"
         self.edit_name = QLineEdit(); self.edit_name.setPlaceholderText("Task Name"); self.edit_name.setStyleSheet(input_style)
         self.edit_time = QLineEdit(); self.edit_time.setPlaceholderText("Time (e.g. 3:00 PM)"); self.edit_time.setStyleSheet(input_style)
         self.edit_cat = QComboBox(); self.edit_cat.addItems(["Work", "Health", "Personal", "Study", "Other"]); self.edit_cat.setStyleSheet(input_style)
@@ -982,7 +1018,7 @@ class DynamicIsland(QWidget):
             bar = QFrame(); bar.setFixedWidth(3); bar.setStyleSheet(f"background-color: {t.get('color', '#00A0FF')}; border-radius: 1px;")
             det = QVBoxLayout(); det.setContentsMargins(0, 0, 0, 0); det.setSpacing(1)
             n = QLabel(t['name']); n.setStyleSheet("font-size: 13px; font-weight: 600; padding: 0px;")
-            c = QLabel(t.get('category', 'Task')); c.setStyleSheet("font-size: 10px; color: #888; padding: 0px;")
+            c = QLabel(t.get('category', 'Task')); c.setStyleSheet(f"font-size: 10px; color: {css(self.theme['text']['muted'])}; padding: 0px;")
             det.addWidget(n); det.addWidget(c)
             tm = QLabel(t.get('time', '')); tm.setStyleSheet("font-size: 11px; font-weight: 500;")
             row.addWidget(bar); row.addLayout(det); row.addStretch(); row.addWidget(tm)
@@ -1009,11 +1045,11 @@ class DynamicIsland(QWidget):
         def add_item(layout, icon, label):
             v = QVBoxLayout(); v.setSpacing(4)
             h = QHBoxLayout(); ico = QLabel(); ico.setPixmap(qta.icon(icon, color="white").pixmap(14, 14))
-            txt = QLabel(label); txt.setStyleSheet("font-size: 11px; color: #888; font-weight: 600;")
+            txt = QLabel(label); txt.setStyleSheet(f"font-size: 11px; color: {css(self.theme['text']['muted'])}; font-weight: 600;")
             h.addWidget(ico); h.addWidget(txt); h.addStretch()
             val = QLabel("0%"); val.setStyleSheet("font-size: 13px; font-weight: 600;")
             bar = QProgressBar(); bar.setFixedHeight(4); bar.setTextVisible(False); bar.setMaximum(100)
-            bar.setStyleSheet("QProgressBar { background-color: #222; border-radius: 2px; border: none; } QProgressBar::chunk { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #00FF80, stop:1 #80FF00); border-radius: 2px; }")
+            pg = self.theme['progress']; bar.setStyleSheet(f"QProgressBar {{ background-color: {css(pg['track'])}; border-radius: 2px; border: none; }} QProgressBar::chunk {{ background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 {css(pg['from'])}, stop:1 {css(pg['to'])}); border-radius: 2px; }}")
             v.addLayout(h); v.addWidget(val); v.addWidget(bar)
             layout.addLayout(v); return bar, val
 
@@ -1027,7 +1063,7 @@ class DynamicIsland(QWidget):
         
         nv = QVBoxLayout(); nv.setSpacing(4)
         nh = QHBoxLayout(); nico = QLabel(); nico.setPixmap(qta.icon("mdi.web", color="white").pixmap(14, 14))
-        ntxt = QLabel("NETWORK"); ntxt.setStyleSheet("font-size: 11px; color: #888; font-weight: 600;")
+        ntxt = QLabel("NETWORK"); ntxt.setStyleSheet(f"font-size: 11px; color: {css(self.theme['text']['muted'])}; font-weight: 600;")
         nh.addWidget(nico); nh.addWidget(ntxt); nh.addStretch(); nv.addLayout(nh)
         self.net_down_L = QLabel("↓ 0 KB/s"); self.net_up_L = QLabel("↑ 0 KB/s")
         for lb in [self.net_down_L, self.net_up_L]: lb.setStyleSheet("font-size: 12px; font-weight: 600;")
@@ -1039,7 +1075,7 @@ class DynamicIsland(QWidget):
         w = QWidget(); l = QVBoxLayout(w); l.setContentsMargins(25, 8, 25, 18); l.setSpacing(8)
         now = datetime.datetime.now(); days = (datetime.date(now.year, now.month + 1, 1) - datetime.date(now.year, now.month, 1)).days if now.month < 12 else 31
         header = QHBoxLayout(); title = QLabel(now.strftime("%B Progress")); title.setStyleSheet("font-weight: bold; font-size: 14px;")
-        perc = QLabel(f"{int(now.day/days*100)}%"); perc.setStyleSheet("color: #00A0FF; font-weight: bold; font-size: 14px;")
+        perc = QLabel(f"{int(now.day/days*100)}%"); perc.setStyleSheet(f"color: {css(self.theme['month_progress']['percent'])}; font-weight: bold; font-size: 14px;")
         header.addWidget(title); header.addStretch(); header.addWidget(perc); header.addWidget(self.create_action_button("month"))
         l.addLayout(header); grid = QGridLayout(); grid.setSpacing(8); grid.setContentsMargins(0, 5, 0, 0)
         for i in range(days):
@@ -1051,7 +1087,7 @@ class DynamicIsland(QWidget):
         w = QWidget(); l = QHBoxLayout(w); l.setContentsMargins(25, 0, 25, 0); l.setSpacing(10); l.setAlignment(Qt.AlignmentFlag.AlignCenter)
         btn_l = QPushButton("<", objectName="NavButton"); btn_r = QPushButton(">", objectName="NavButton")
         btn_l.clicked.connect(lambda: self.scroll_controls(-1)); btn_r.clicked.connect(lambda: self.scroll_controls(1))
-        lbl = QLabel("Basics"); lbl.setStyleSheet("font-size: 15px; font-weight: 700; color: #BBB; letter-spacing: 1.2px;")
+        lbl = QLabel("Basics"); lbl.setStyleSheet(f"font-size: 15px; font-weight: 700; color: {css(self.theme['text']['heading_muted'])}; letter-spacing: 1.2px;")
         l.addWidget(btn_l); l.addWidget(lbl); l.addWidget(btn_r); return w
 
 
@@ -1397,7 +1433,7 @@ class DynamicIsland(QWidget):
         self.grow_base = None
 
     def contextMenuEvent(self, event):
-        menu = QMenu(self); menu.setStyleSheet("QMenu { background-color: #1a1a1a; color: #fff; border: 1px solid #333; padding: 4px; border-radius: 6px; } QMenu::item:selected { background-color: " + self.accent_color + "; }")
+        menu = QMenu(self); mn = self.theme['menu']; menu.setStyleSheet(f"QMenu {{ background-color: {css(mn['background'])}; color: {css(mn['text'])}; border: 1px solid {css(mn['border'])}; padding: 4px; border-radius: 6px; }} QMenu::item:selected {{ background-color: {self.accent_color}; }}")
         am = menu.addMenu("Animation Style")
         for s in ["Glow Sweep", "Fluid Blobs", "Neon Border"]:
             a = am.addAction(s); a.setCheckable(True); a.setChecked(self.animation_style == s); a.triggered.connect(lambda _, st=s: self.set_animation_style(st))
@@ -1406,6 +1442,8 @@ class DynamicIsland(QWidget):
             a = sm.addAction(s); a.setCheckable(True); a.setChecked(self.island_style == s); a.triggered.connect(lambda _, st=s: self.set_island_style(st))
         
         menu.addSeparator()
+        menu.addAction("Edit Theme (theme.json)").triggered.connect(self.open_theme_file)
+        menu.addAction("Reload Theme").triggered.connect(self.apply_theme)
         comp_action = menu.addAction("Fix Big Box (Compatibility Mode)")
         comp_action.setCheckable(True)
         comp_action.setChecked(self.compatibility_mode)
