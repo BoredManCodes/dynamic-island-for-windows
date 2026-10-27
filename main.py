@@ -1323,6 +1323,23 @@ class DynamicIsland(QWidget):
         self.update_island_geometry(self.get_island_rect(), self.get_current_radius())
         self.update()
 
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.remove_dwm_border()
+
+    def remove_dwm_border(self):
+        # Win11 draws a 1px DWM border and rounded corners around top-level windows,
+        # which shows as a box around the transparent window.
+        try:
+            hwnd = int(self.winId())
+            dwm = ctypes.windll.dwmapi
+            border_none = ctypes.c_uint(0xFFFFFFFE)   # DWMWA_COLOR_NONE
+            dwm.DwmSetWindowAttribute(hwnd, 34, ctypes.byref(border_none), 4)   # DWMWA_BORDER_COLOR
+            no_round = ctypes.c_int(1)                # DWMWCP_DONOTROUND
+            dwm.DwmSetWindowAttribute(hwnd, 33, ctypes.byref(no_round), 4)      # DWMWA_WINDOW_CORNER_PREFERENCE
+        except Exception:
+            pass
+
     def check_mouse_position(self):
         if self.current_state == "Notify" or self.is_dialog_open: return
         cursor_pos = QCursor.pos()
