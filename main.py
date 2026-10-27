@@ -3,9 +3,10 @@ import psutil
 import winreg
 import ctypes
 import datetime
+import time
 import math
 import qtawesome as qta
-from PyQt6.QtCore import Qt, QTimer, QRect, QRectF, QPropertyAnimation, QEasingCurve, QPoint, QParallelAnimationGroup, QPointF, pyqtProperty
+from PyQt6.QtCore import Qt, QTimer, QRect, QRectF, QPropertyAnimation, QEasingCurve, QPoint, QParallelAnimationGroup, QPointF, QAbstractAnimation, pyqtProperty
 from PyQt6.QtGui import (QCursor, QPainter, QColor, QBrush, QPaintEvent, 
                          QLinearGradient, QRadialGradient, QConicalGradient, QAction, QPen, QPainterPath, QRegion, QPixmap)
 import json
@@ -138,6 +139,8 @@ class DynamicIsland(QWidget):
         self.island_h_anim = QPropertyAnimation(self, b"island_h")
         for anim in [self.island_w_anim, self.island_h_anim]:
             anim.setDuration(850); anim.setEasingCurve(QEasingCurve.Type.OutExpo)
+        self.grow_w_anim = QPropertyAnimation(self, b"island_w"); self.grow_h_anim = QPropertyAnimation(self, b"island_h")
+        self.grow_base = None
             
         self.shine_phase = -1.0
         self.shine_anim = QPropertyAnimation(self, b"shine_phase")
@@ -227,6 +230,7 @@ class DynamicIsland(QWidget):
         
         self.master_timer = QTimer(self); self.master_timer.timeout.connect(self.update_content); self.master_timer.start(1000)
         self.anim_timer = QTimer(self); self.anim_timer.timeout.connect(self.update_animation); self.anim_timer.start(16)
+        self.HOVER_DELAY = max(0, self.settings.get("hover_delay_ms", 500)) / 1000; self.HOVER_GROW = max(0, self.settings.get("hover_grow_px", 30)); self.hover_enter_t = None
         self.hit_timer = QTimer(self); self.hit_timer.timeout.connect(self.check_mouse_position); self.hit_timer.start(25)
         
                                                                             
@@ -1227,6 +1231,7 @@ class DynamicIsland(QWidget):
         sr = self.screen().availableGeometry(); return sr.x() + (sr.width() // 2) - (width // 2)
 
     def execute_liquid_transition(self):
+        self.grow_w_anim.stop(); self.grow_h_anim.stop(); self.grow_base = None
         if self.is_charging: w, h = 850, 40
         elif self.current_state == "Idle": 
             if self.features[self.current_feature_index] == "media" and self.showing_lyrics:
@@ -1360,15 +1365,36 @@ class DynamicIsland(QWidget):
         if hit_rect.contains(cursor_pos):
             if ex & WS_EX_TRANSPARENT: 
                 ctypes.windll.user32.SetWindowLongW(hwnd, -20, ex & ~WS_EX_TRANSPARENT)
-            if self.current_state != "Hover": 
-                self.change_state("Hover")
+            if self.current_state != "Hover":
+                if self.hover_enter_t is None:
+                    self.hover_enter_t = time.monotonic(); self.start_hover_grow()
+                if time.monotonic() - self.hover_enter_t >= self.HOVER_DELAY:
+                    self.hover_enter_t = None; self.change_state("Hover")
+            else:
+                self.hover_enter_t = None
             self.revert_timer.stop()
         else:
+            if self.hover_enter_t is not None: self.hover_enter_t = None; self.end_hover_grow()
             if not (ex & WS_EX_TRANSPARENT): 
                 ctypes.windll.user32.SetWindowLongW(hwnd, -20, ex | WS_EX_TRANSPARENT)
             if self.current_state == "Hover":
                 if not self.revert_timer.isActive():
                     self.revert_timer.start(1200)
+
+    def start_hover_grow(self):
+        if self.current_state != "Idle" or self.is_charging or self.anim_group.state() != QAbstractAnimation.State.Stopped: return
+        lyrics = self.features[self.current_feature_index] == "media" and self.showing_lyrics
+        self.grow_base = (self.LYRIC_W if lyrics else self.IDLE_W, self.IDLE_H)
+        for anim, cur, end in [(self.grow_w_anim, self._island_w, self.grow_base[0] + self.HOVER_GROW), (self.grow_h_anim, self._island_h, self.grow_base[1] + self.HOVER_GROW // 3)]:
+            anim.stop(); anim.setDuration(int(self.HOVER_DELAY * 1000)); anim.setEasingCurve(QEasingCurve.Type.InOutSine)
+            anim.setStartValue(cur); anim.setEndValue(end); anim.start()
+
+    def end_hover_grow(self):
+        if self.grow_base is None: return
+        for anim, cur, end in [(self.grow_w_anim, self._island_w, self.grow_base[0]), (self.grow_h_anim, self._island_h, self.grow_base[1])]:
+            anim.stop(); anim.setDuration(300); anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+            anim.setStartValue(cur); anim.setEndValue(end); anim.start()
+        self.grow_base = None
 
     def contextMenuEvent(self, event):
         menu = QMenu(self); menu.setStyleSheet("QMenu { background-color: #1a1a1a; color: #fff; border: 1px solid #333; padding: 4px; border-radius: 6px; } QMenu::item:selected { background-color: " + self.accent_color + "; }")
