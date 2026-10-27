@@ -188,6 +188,7 @@ class SettingsDialog(QDialog):
         self.beh_spin(f, "Scroll sensitivity (lower = slower)", "scroll_sensitivity", 100, 10, 400, 10, " %")
         self.beh_spin(f, "Pause after each panel switch", "scroll_cooldown_ms", 250, 0, 1500, 50, " ms")
         self.beh_check(f, "Music", "Open the music tab when playback starts", "music_auto_open", False)
+        self.beh_check(f, "Lyrics", "Show synced lyrics while music plays", "show_lyrics", True)
         self.beh_check(f, "Clock", "Hide the status dot next to the clock", "hide_clock_dot", False)
         g = QCheckBox("Hold CTRL over the island to ghost it and click through"); g.setChecked(isl.settings.get("ctrl_ghost", True))
         g.toggled.connect(lambda v: isl.set_behavior("ctrl_ghost", v)); f.addRow("CTRL ghost", g)

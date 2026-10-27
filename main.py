@@ -4,6 +4,7 @@ import winreg
 import ctypes
 import datetime
 import time
+import threading
 import math
 import qtawesome as qta
 from PyQt6.QtCore import Qt, QTimer, QRect, QRectF, QPropertyAnimation, QEasingCurve, QPoint, QParallelAnimationGroup, QPointF, QAbstractAnimation, pyqtProperty
@@ -1574,6 +1575,7 @@ class DynamicIsland(QWidget):
         if self.current_state == "Hover": self.update_feature_view()
 
     def update_lyrics(self, text):
+        if not self.settings.get("show_lyrics", True): text = ""
         was_showing = self.showing_lyrics
         self.media_lyric_text = text
         self.showing_lyrics = bool(text)
@@ -1963,6 +1965,7 @@ class DynamicIsland(QWidget):
     def set_behavior(self, key, value):
         self.settings[key] = value; self.apply_behavior(); self.save_settings()
         if key == "hide_clock_dot": self.update_content()
+        if key == "show_lyrics" and not value: self.update_lyrics("")
         if key == "brightness_ddc": self.brightness_monitor.ddc_enabled = bool(value)
         if key.startswith("outlook_"): self.apply_outlook()
         if key in ("network_alerts", "bt_battery_min"): self.apply_net_settings()
@@ -1986,7 +1989,19 @@ class DynamicIsland(QWidget):
         self.outlook_monitor.stop()
         super().closeEvent(event); QApplication.quit()
 
+def install_crash_log():
+    import faulthandler, traceback
+    base = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))
+    log = open(os.path.join(base, "crash.log"), "a", buffering=1, encoding="utf-8")
+    log.write(f"\n--- start {datetime.datetime.now().isoformat()} ---\n"); faulthandler.enable(log, all_threads=True)
+    def hook(t, v, tb): log.write("".join(traceback.format_exception(t, v, tb))); sys.__excepthook__(t, v, tb)
+    sys.excepthook = hook
+    def thread_hook(a): log.write(f"thread {a.thread.name if a.thread else '?'}:\n" + "".join(traceback.format_exception(a.exc_type, a.exc_value, a.exc_traceback)))
+    threading.excepthook = thread_hook
+
 if __name__ == "__main__":
+    try: install_crash_log()
+    except Exception: pass
     app = QApplication(sys.argv); app.setQuitOnLastWindowClosed(False); island = DynamicIsland(); island.show()
     QTimer.singleShot(100, lambda: (island.update_island_geometry(island.get_island_rect(), island.get_current_radius()), island.content_container.move(0, 0), island.update()))
     sys.exit(app.exec())
