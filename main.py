@@ -45,6 +45,33 @@ DEFAULT_TASKS = [
     {"name": "Dinner with Family", "category": "Personal", "color": "#FF5050", "time": "8:00 PM"}
 ]
 
+class ToggleSwitch(QWidget):
+    ON_COLOR, OFF_COLOR = QColor("#34C759"), QColor("#FF3B30")
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(50, 28); self._pos = 0.0
+        self.anim = QPropertyAnimation(self, b"knob", self); self.anim.setDuration(260); self.anim.setEasingCurve(QEasingCurve.Type.OutBack)
+
+    def get_pos(self): return self._pos
+    def set_pos(self, v): self._pos = v; self.update()
+    knob = pyqtProperty(float, get_pos, set_pos)
+
+    def set_checked(self, on, animate=True):
+        self.anim.stop()
+        if animate:
+            self.anim.setStartValue(self._pos); self.anim.setEndValue(1.0 if on else 0.0); self.anim.start()
+        else: self.set_pos(1.0 if on else 0.0)
+
+    def paintEvent(self, e):
+        p = QPainter(self); p.setRenderHint(QPainter.RenderHint.Antialiasing); p.setPen(Qt.PenStyle.NoPen)
+        t = max(0.0, min(1.0, self._pos)); a, b = self.OFF_COLOR, self.ON_COLOR
+        p.setBrush(QColor(int(a.red() + (b.red() - a.red()) * t), int(a.green() + (b.green() - a.green()) * t), int(a.blue() + (b.blue() - a.blue()) * t)))
+        h = self.height(); p.drawRoundedRect(QRectF(0, 0, self.width(), h), h / 2, h / 2)
+        d = h - 6; x = 3 + (self.width() - d - 6) * self._pos
+        p.setBrush(QColor(0, 0, 0, 40)); p.drawEllipse(QRectF(x, 4, d, d))
+        p.setBrush(QColor("white")); p.drawEllipse(QRectF(x, 3, d, d))
+
 class MarqueeLabel(QLabel):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -256,7 +283,7 @@ class DynamicIsland(QWidget):
         self.control_balls = []
         
                                   
-        self.event_title, self.event_text = "", ""
+        self.event_title, self.event_text = "", ""; self.key_event_on = None
         self.revert_timer = QTimer(self); self.revert_timer.setSingleShot(True); self.revert_timer.timeout.connect(self.on_revert)
         self.alert = None; self.alert_queue = []; self.alert_size = (self.NOTIFY_W, self.NOTIFY_H)
         self._alert_tint = 0.0; self.alert_tint_color = None
@@ -635,6 +662,7 @@ class DynamicIsland(QWidget):
         self.ram_label = QLabel("RAM: 0%"); self.ram_label.setObjectName("PerfLabel")
         self.perf_layout.addWidget(self.cpu_label); self.perf_layout.addWidget(self.ram_label)
         self.header_layout.addStretch(); self.header_layout.addWidget(self.media_controls); self.header_layout.addWidget(self.perf_widget); self.media_controls.hide(); self.perf_widget.hide()
+        self.key_switch = ToggleSwitch(); self.header_layout.addWidget(self.key_switch); self.key_switch.hide()
         
                             
         self.perf_panel = self.create_perf_panel()
@@ -829,7 +857,7 @@ class DynamicIsland(QWidget):
         return "#000000" if c is not None and c.lightness() > 150 else "#FFFFFF"
 
     def reset_alert_widgets(self):
-        self.alert_text.hide(); self.alert_body.hide(); self.status_text.show(); self.status_text.setStyleSheet(""); self.status_icon.setStyleSheet(""); self.header_widget.setMinimumHeight(0)
+        self.key_switch.hide(); self.alert_text.hide(); self.alert_body.hide(); self.status_text.show(); self.status_text.setStyleSheet(""); self.status_icon.setStyleSheet(""); self.header_widget.setMinimumHeight(0)
 
     def show_alert_content(self):
         a = self.alert; fg = self.alert_fg(); spec = a.get("icon", "")
@@ -861,9 +889,10 @@ class DynamicIsland(QWidget):
         if self.alert:
             if not self.alert.get("transient"): self.alert_queue.insert(0, self.alert)
             self.start_alert({"title": name, "text": "ENABLED" if is_on else "DISABLED", "sticky": False, "mode": "marquee", "icon": "mdi.lightning-bolt", "duration_ms": 2500, "transient": True}); return
-        self.event_title = name; self.event_text = ("ENABLED" if is_on else "DISABLED")
+        self.event_title = name; self.event_text = ("ENABLED" if is_on else "DISABLED"); self.key_event_on = is_on
         if self.current_state == "Notify": self.update_feature_view(); self.execute_liquid_transition()
         else: self.change_state("Notify")
+        self.key_switch.set_checked(not is_on, animate=False); QTimer.singleShot(280, lambda: self.key_switch.set_checked(is_on))
         self.revert_timer.start(2500)
 
     def show_notification(self, app, title, text):
@@ -872,7 +901,7 @@ class DynamicIsland(QWidget):
         if app.lower() in [a.lower() for a in self.settings.get("ignored_apps", [])]: return
         if self.alert:
             self.enqueue_alert({"title": app, "text": f"{title}: {text}" if title else text, "sticky": False, "mode": "marquee", "icon": "mdi.email"}); return
-        self.event_title = app; self.event_text = (f"{title}: {text}" if title else text)
+        self.event_title = app; self.event_text = (f"{title}: {text}" if title else text); self.key_event_on = None
         if self.current_state == "Notify": self.update_feature_view(); self.execute_liquid_transition()
         else: self.change_state("Notify")
         self.revert_timer.start(int(self.settings.get("notification_ms", 3500)))
@@ -1302,7 +1331,10 @@ class DynamicIsland(QWidget):
             self.header_widget.show(); self.update_content(); return
         if self.current_state == "Notify":
             self.perf_panel.hide(); self.perf_widget.hide(); self.media_controls.hide(); self.weather_panel.hide(); self.calendar_panel.hide(); self.month_panel.hide(); self.basics_panel.hide(); self.header_widget.show()
-            self.status_icon.setPixmap(qta.icon('mdi.lightning-bolt' if "Lock" in self.event_title else 'mdi.email', color='white').pixmap(18, 18))
+            if self.key_event_on is not None:
+                self.status_icon.setPixmap(qta.icon('mdi.keyboard-variant', color='white').pixmap(18, 18))
+                self.status_text.setText(self.event_title); self.key_switch.show(); return
+            self.status_icon.setPixmap(qta.icon('mdi.email', color='white').pixmap(18, 18))
             dt = f"{self.event_title} - {self.event_text}"; self.status_text.setText(dt[:45] + "..." if len(dt) > 48 else dt)
             return
         feature = self.features[self.current_feature_index]
