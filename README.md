@@ -102,7 +102,7 @@ Download `DynamicIsland.exe` from the [latest release](https://github.com/BoredM
    python main.py
    ```
 
-To build the exe yourself, create a `venv`, install the requirements and run `.uild_exe.ps1`. The result is `dist\DynamicIsland.exe`.
+To build the exe yourself, create a `venv`, install the requirements and run `.\build_exe.ps1`. The result is `dist\DynamicIsland.exe`.
 
 ## Dependencies
 
