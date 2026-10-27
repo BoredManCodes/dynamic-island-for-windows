@@ -4,16 +4,37 @@
 
 A sleek, fluid, and highly customizable Dynamic Island for Windows built with Python and PyQt6.
 
-# Scroll on the Panels !
-
 ## Features
 
-- **Fluid Animations**: Smooth transitions between states (Idle, Hover, Music, Notifications).
-- **System Monitoring**: Real-time CPU and RAM usage tracking.
-- **Media Controls**: Integrated media playback controls with album art accent color detection.
-- **Event Notifications**: Visual feedback for Caps Lock/Num Lock changes and system notifications.
-- **Customizable Appearance**: Choose between different animation styles (Glow Sweep, Fluid Blobs, Neon Border) and island styles (Default, Liquid Glass).
-- **Auto-start**: Option to start with Windows.
+**Island and panels**
+- Fluid animated transitions between idle, hover, music and notification states.
+- Scroll the mouse wheel over the island to cycle panels: system performance, media, weather, calendar, month view and basics (power, sleep, restart). Scroll sensitivity and the pause after each switch are adjustable.
+- Two island styles (Default, Notch Nook) and four animation styles (Glow Sweep, Fluid Blobs, Neon Border, Equaliser driven by live system audio).
+- Option to show the island on every display, and a compatibility mode that covers the full screen.
+- Hold CTRL over the island to ghost it and click through.
+
+**Media**
+- Playback controls for any app that uses Windows media controls, with album art accent color.
+- Synced lyrics (LRC) in the island while music plays. Can be turned off in Settings.
+- Option to open the music tab automatically when playback starts.
+
+**Popups and alerts**
+- Windows notifications, with a per-app ignore list.
+- Volume and brightness popups (external monitors via DDC/CI, optional).
+- Charging popup with an animated bar and time to full.
+- Wi-Fi, LAN, Bluetooth and VPN connect/disconnect alerts, plus Bluetooth device battery checks.
+- Caps Lock and Num Lock switch popups.
+- Local HTTP API (127.0.0.1) to send your own alerts with an icon, title, text and color.
+
+**Outlook and tasks**
+- Calendar events, Microsoft To Do tasks and unread mail count from classic Outlook, with an idle countdown to the next meeting and a pre-meeting alert.
+- Local task list editable from the island.
+
+**Customization**
+- Settings dialog (right-click the island) for behavior, theme, status indicator, Outlook, notifications and the API.
+- Status dot beside the clock shows battery, album color, weather or accent color; it can be hidden.
+- `theme.json` overrides colors and QSS and hot-reloads while the app runs.
+- Optional start with Windows.
 
 ## Previews
 
@@ -62,9 +83,15 @@ For those who prefer a more integrated look, the "Notch Nook" style replaces the
 
 ## Installation
 
+### Prebuilt exe
+
+Download `DynamicIsland.exe` from the [latest release](https://github.com/BoredManCodes/dynamic-island-for-windows/releases/latest) and run it. Settings are saved in `config.json` next to the exe.
+
+### From source
+
 1. Clone the repository:
    ```bash
-   git clone https://github.com/rajsriv/dynamic-island-for-windows.git
+   git clone https://github.com/BoredManCodes/dynamic-island-for-windows.git
    ```
 2. Install the required dependencies:
    ```bash
@@ -75,12 +102,19 @@ For those who prefer a more integrated look, the "Notch Nook" style replaces the
    python main.py
    ```
 
+To build the exe yourself, create a `venv`, install the requirements and run `.uild_exe.ps1`. The result is `dist\DynamicIsland.exe`.
+
 ## Dependencies
 
 - PyQt6
 - QtAwesome
 - psutil
-- winsdk (for media and notification monitoring)
+- winsdk (media and notification monitoring)
+- pycaw, comtypes and soundcard (volume and audio levels)
+- pywin32 (Outlook)
+- Pillow and requests (album art and lyrics)
+
+Windows only.
 
 ## License
 
