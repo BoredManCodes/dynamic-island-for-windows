@@ -52,6 +52,7 @@ class SettingsDialog(QDialog):
         self.setStyleSheet(STYLE.format(bg=css(mn['background']), fg=css(mn['text']), border=css(mn['border']), accent=island.accent_color))
         lay = QVBoxLayout(self); tabs = QTabWidget(); lay.addWidget(tabs)
         tabs.addTab(self.page_general(), "General")
+        tabs.addTab(self.page_behavior(), "Behavior")
         tabs.addTab(self.page_indicator(), "Indicator")
         tabs.addTab(self.page_theme(), "Theme")
         tabs.addTab(self.page_notifications(), "Notifications")
@@ -86,6 +87,21 @@ class SettingsDialog(QDialog):
         f.addRow("Weather location", loc)
         return w
 
+    def beh_spin(self, form, label, key, default, lo, hi, step=1, suffix=""):
+        s = QSpinBox(); s.setRange(lo, hi); s.setSingleStep(step); s.setSuffix(suffix); s.setValue(int(self.island.settings.get(key, default)))
+        s.valueChanged.connect(lambda v, k=key: self.island.set_behavior(k, v)); form.addRow(label, s)
+
+    def page_behavior(self):
+        w, f = self.page(); isl = self.island
+        self.beh_spin(f, "Hover delay before expanding", "hover_delay_ms", 500, 0, 3000, 50, " ms")
+        self.beh_spin(f, "Grow on hover", "hover_grow_px", 30, 0, 100, 5, " px")
+        self.beh_spin(f, "Collapse delay after leaving", "hover_exit_ms", 1200, 0, 5000, 100, " ms")
+        self.beh_spin(f, "Notification display time", "notification_ms", 3500, 500, 15000, 250, " ms")
+        g = QCheckBox("Hold CTRL over the island to ghost it and click through"); g.setChecked(isl.settings.get("ctrl_ghost", True))
+        g.toggled.connect(lambda v: isl.set_behavior("ctrl_ghost", v)); f.addRow("CTRL ghost", g)
+        self.spin_row(f, "Ghost opacity", "island.ctrl_ghost_opacity", 0, 1, 0.05, 2)
+        return w
+
     def page_indicator(self):
         w, f = self.page()
         m = QComboBox(); m.addItems(["auto", "battery", "album", "weather", "accent"]); m.setCurrentText(str(self.theme['status_indicator']['mode']).lower())
@@ -113,7 +129,6 @@ class SettingsDialog(QDialog):
         self.color_row(f, "Border color", "island.border_color", alpha=True)
         self.spin_row(f, "Border width", "island.border_width", 0, 10, 0.1, 1)
         self.spin_row(f, "Corner radius", "island.radius", 0, 60)
-        self.spin_row(f, "Ghost opacity (CTRL)", "island.ctrl_ghost_opacity", 0, 1, 0.05, 2)
         self.color_row(f, "Text", "text.primary")
         self.color_row(f, "Secondary text", "text.secondary")
         self.color_row(f, "Progress bar start", "progress.from")

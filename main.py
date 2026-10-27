@@ -236,7 +236,7 @@ class DynamicIsland(QWidget):
         
         self.master_timer = QTimer(self); self.master_timer.timeout.connect(self.update_content); self.master_timer.timeout.connect(self.check_theme_reload); self.master_timer.start(1000)
         self.anim_timer = QTimer(self); self.anim_timer.timeout.connect(self.update_animation); self.anim_timer.start(16)
-        self.HOVER_DELAY = max(0, self.settings.get("hover_delay_ms", 500)) / 1000; self.HOVER_GROW = max(0, self.settings.get("hover_grow_px", 30)); self.hover_enter_t = None
+        self.apply_behavior(); self.hover_enter_t = None
         self.hit_timer = QTimer(self); self.hit_timer.timeout.connect(self.check_mouse_position); self.hit_timer.start(25)
         
                                                                             
@@ -752,7 +752,7 @@ class DynamicIsland(QWidget):
         self.event_title = app; self.event_text = (f"{title}: {text}" if title else text)
         if self.current_state == "Notify": self.update_feature_view(); self.execute_liquid_transition()
         else: self.change_state("Notify")
-        self.revert_timer.start(3500)
+        self.revert_timer.start(int(self.settings.get("notification_ms", 3500)))
 
     def paint_weather_bg(self, painter, rect, radius):
         painter.save(); pt = self.theme['panels']['weather']
@@ -1422,7 +1422,7 @@ class DynamicIsland(QWidget):
         ex = ctypes.windll.user32.GetWindowLongW(hwnd, -20)
         WS_EX_TRANSPARENT = 0x20
         
-        ghost = hit_rect.contains(cursor_pos) and bool(ctypes.windll.user32.GetAsyncKeyState(0x11) & 0x8000)
+        ghost = self.settings.get("ctrl_ghost", True) and hit_rect.contains(cursor_pos) and bool(ctypes.windll.user32.GetAsyncKeyState(0x11) & 0x8000)
         ghost_op = float(self.theme['island']['ctrl_ghost_opacity'])
         if ghost != getattr(self, "_ghost", False):
             self._ghost = ghost; self.setWindowOpacity(ghost_op if ghost else 1.0)
@@ -1445,7 +1445,7 @@ class DynamicIsland(QWidget):
                 ctypes.windll.user32.SetWindowLongW(hwnd, -20, ex | WS_EX_TRANSPARENT)
             if self.current_state == "Hover":
                 if not self.revert_timer.isActive():
-                    self.revert_timer.start(1200)
+                    self.revert_timer.start(int(self.settings.get("hover_exit_ms", 1200)))
 
     def start_hover_grow(self):
         if self.current_state != "Idle" or self.is_charging or self.anim_group.state() != QAbstractAnimation.State.Stopped: return
@@ -1471,6 +1471,12 @@ class DynamicIsland(QWidget):
         if getattr(self, 'settings_dialog', None) is not None and self.settings_dialog.isVisible():
             self.settings_dialog.raise_(); self.settings_dialog.activateWindow(); return
         self.settings_dialog = SettingsDialog(self); self.settings_dialog.show()
+
+    def apply_behavior(self):
+        self.HOVER_DELAY = max(0, self.settings.get("hover_delay_ms", 500)) / 1000; self.HOVER_GROW = max(0, self.settings.get("hover_grow_px", 30))
+
+    def set_behavior(self, key, value):
+        self.settings[key] = value; self.apply_behavior(); self.save_settings()
 
     def set_theme_values(self, changes):
         update_theme_file(changes); self.apply_theme()
