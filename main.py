@@ -1398,8 +1398,14 @@ class DynamicIsland(QWidget):
         ex = ctypes.windll.user32.GetWindowLongW(hwnd, -20)
         WS_EX_TRANSPARENT = 0x20
         
-        if hit_rect.contains(cursor_pos):
-            if ex & WS_EX_TRANSPARENT: 
+        ghost = hit_rect.contains(cursor_pos) and bool(ctypes.windll.user32.GetAsyncKeyState(0x11) & 0x8000)
+        ghost_op = float(self.theme['island']['ctrl_ghost_opacity'])
+        if ghost != getattr(self, "_ghost", False):
+            self._ghost = ghost; self.setWindowOpacity(ghost_op if ghost else 1.0)
+        elif ghost and abs(self.windowOpacity() - ghost_op) > 0.01:
+            self.setWindowOpacity(ghost_op)
+        if hit_rect.contains(cursor_pos) and not ghost:
+            if ex & WS_EX_TRANSPARENT:
                 ctypes.windll.user32.SetWindowLongW(hwnd, -20, ex & ~WS_EX_TRANSPARENT)
             if self.current_state != "Hover":
                 if self.hover_enter_t is None:

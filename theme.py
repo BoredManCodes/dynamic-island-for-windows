@@ -29,6 +29,7 @@ DEFAULT_THEME = {
         "shadow_color": "#000000",
         "shadow_alpha": 15,
         "shadow_layers": 5,
+        "ctrl_ghost_opacity": 0.15,
     },
     "animation": {
         "phase_speed": 0.005,
