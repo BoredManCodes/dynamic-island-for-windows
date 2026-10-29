@@ -29,6 +29,7 @@ from event_monitor import KeyLockMonitor
 from audio_monitor import AudioMonitor
 from notification_monitor import NotificationMonitor
 from weather_monitor import WeatherMonitor
+from weather_bg import WeatherScene
 from outlook_monitor import OutlookMonitor
 from volume_monitor import VolumeMonitor
 from network_monitor import NetworkMonitor
@@ -269,6 +270,7 @@ class DynamicIsland(QWidget):
         self.weather_bg_anim.setEasingCurve(QEasingCurve.Type.InOutSine)
         
         self.weather_bg_phase = 0.0
+        self.weather_scene = WeatherScene(); self.weather_has_data = False
         
         self._perf_bg_opacity = 0.0
         self.perf_bg_anim = QPropertyAnimation(self, b"perf_bg_opacity")
@@ -1061,6 +1063,10 @@ class DynamicIsland(QWidget):
         self.revert_timer.start(int(self.settings.get("notification_ms", 3500)))
 
     def paint_weather_bg(self, painter, rect, radius):
+        if self.weather_has_data:
+            clip = self.build_notch_path(rect) if self.island_style == "Notch Nook" else QPainterPath()
+            if self.island_style != "Notch Nook": clip.addRoundedRect(QRectF(rect), radius, radius)
+            self.weather_scene.paint(painter, rect, clip, self._weather_bg_opacity); return
         painter.save(); pt = self.theme['panels']['weather']
         painter.setOpacity(self._weather_bg_opacity)
         p = self.weather_bg_phase * 2 * math.pi
@@ -1177,6 +1183,7 @@ class DynamicIsland(QWidget):
 
     def update_weather(self, data):
         self.weather_icon = data.get("icon")
+        if data.get("code") is not None: self.weather_scene.set_condition(data["code"], data.get("is_day", True)); self.weather_has_data = True
         self.weather_temp_label.setText(data["temp"])
         self.weather_city_label.setText(data["city"])
         self.weather_cond_label.setText(data["desc"])

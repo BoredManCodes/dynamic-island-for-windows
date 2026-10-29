@@ -95,6 +95,8 @@ class WeatherMonitor(QThread):
                             "temp": f"{int(current['temperature'])}°",
                             "desc": self.get_weather_desc(current["weathercode"]),
                             "icon": self.get_weather_icon(current["weathercode"]),
+                            "code": current["weathercode"],
+                            "is_day": bool(current.get("is_day", 1)),
                             "hourly": hourly_data
                         }
                         self.weather_updated.emit(data)
