@@ -7,7 +7,7 @@ import time
 import threading
 import math
 import qtawesome as qta
-from PyQt6.QtCore import Qt, QTimer, QRect, QRectF, QPropertyAnimation, QEasingCurve, QPoint, QParallelAnimationGroup, QPointF, QAbstractAnimation, pyqtProperty
+from PyQt6.QtCore import Qt, QUrl, QTimer, QRect, QRectF, QPropertyAnimation, QEasingCurve, QPoint, QParallelAnimationGroup, QPointF, QAbstractAnimation, pyqtProperty
 from PyQt6.QtGui import (QCursor, QPainter, QColor, QBrush, QPaintEvent, 
                          QLinearGradient, QRadialGradient, QConicalGradient, QAction, QPen, QPainterPath, QRegion, QPixmap)
 from api_server import ApiServer
@@ -975,7 +975,7 @@ class DynamicIsland(QWidget):
         else: self.change_state("Idle")
 
     def apply_api(self):
-        if self.settings.get("api_enabled", False): self.api_server.start(int(self.settings.get("api_port", 8765)), self.settings.get("api_token", ""))
+        if self.settings.get("api_enabled", False): self.api_server.start(int(self.settings.get("api_port", 8765)), self.settings.get("api_token", ""), self.settings.get("api_host", "127.0.0.1"))
         else: self.api_server.stop()
         return self.api_server.running
 
@@ -987,7 +987,7 @@ class DynamicIsland(QWidget):
         elif len(self.alert_queue) < 50: self.alert_queue.append(alert)
 
     def start_alert(self, a):
-        self.alert = a; self.volume_event = None
+        self.alert = a; self.volume_event = None; self.play_alert_sound(a.get("sound_path"))
         if a.get("color"): self.alert_tint_color = qcolor(a["color"])
         self.set_tint(1.0 if a.get("color") else 0.0)
         w = int(self.settings.get("alert_width", 520)); h = int(self.settings.get("alert_height", 40))
@@ -999,6 +999,13 @@ class DynamicIsland(QWidget):
         else: self.revert_timer.start(int(a.get("duration_ms", self.settings.get("notification_ms", 3500))))
         if self.current_state == "Notify": self.update_feature_view(); self.execute_liquid_transition()
         else: self.change_state("Notify")
+
+    def play_alert_sound(self, path):
+        if not path or not os.path.isfile(path): return
+        if getattr(self, "alert_player", None) is None:
+            from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
+            self.alert_player = QMediaPlayer(self); self.alert_audio = QAudioOutput(self); self.alert_player.setAudioOutput(self.alert_audio)
+        self.alert_player.stop(); self.alert_player.setSource(QUrl.fromLocalFile(path)); self.alert_player.play()
 
     def finish_alert(self):
         self.revert_timer.stop()
@@ -2002,7 +2009,7 @@ class DynamicIsland(QWidget):
         self.net_monitor.stop()
         for m in self.mirrors.values(): m.close()
         self.notif_monitor.stop()
-        self.api_server.stop()
+        self.api_server.stop(); self.api_server.sounds.cleanup()
         self.weather_monitor.stop()
         self.outlook_monitor.stop()
         super().closeEvent(event); QApplication.quit()

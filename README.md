@@ -24,7 +24,7 @@ A sleek, fluid, and highly customizable Dynamic Island for Windows built with Py
 - Charging popup with an animated bar and time to full.
 - Wi-Fi, LAN, Bluetooth and VPN connect/disconnect alerts, plus Bluetooth device battery checks.
 - Caps Lock and Num Lock switch popups.
-- Local HTTP API (127.0.0.1) to send your own alerts with an icon, title, text and color.
+- HTTP API (127.0.0.1 by default, optional 0.0.0.0 with a warning) to send your own alerts with an icon, title, text, color and sound (URL, file path or base64).
 
 **Outlook and tasks**
 - Calendar events, Microsoft To Do tasks and unread mail count from classic Outlook, with an idle countdown to the next meeting and a pre-meeting alert.

@@ -20,6 +20,7 @@ Write-Host "--- Starting Build Process for $AppName ---" -ForegroundColor Cyan
     --collect-all win32com `
     --collect-all pycaw `
     --hidden-import brightness_monitor `
+    --hidden-import PyQt6.QtMultimedia `
     --hidden-import comtypes `
     --hidden-import pythoncom `
     --hidden-import winsdk.windows.ui.notifications.management `

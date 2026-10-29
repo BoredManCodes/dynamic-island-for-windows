@@ -1,5 +1,5 @@
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
-from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QFormLayout, QTabWidget, QWidget,
+from PyQt6.QtWidgets import (QMessageBox, QDialog,QVBoxLayout, QHBoxLayout, QFormLayout, QTabWidget, QWidget,
                              QLabel, QPushButton, QComboBox, QSpinBox, QDoubleSpinBox, QCheckBox,
                              QListWidget, QListWidgetItem, QColorDialog, QLineEdit)
 
@@ -248,12 +248,16 @@ class SettingsDialog(QDialog):
 
     def page_api(self):
         w, f = self.page(); isl = self.island; s = isl.settings
-        self.api_on = QCheckBox("Enable local HTTP API (127.0.0.1 only)"); self.api_on.setChecked(s.get("api_enabled", False)); f.addRow(self.api_on)
+        self.api_on = QCheckBox("Enable HTTP API"); self.api_on.setChecked(s.get("api_enabled", False)); f.addRow(self.api_on)
+        self.api_all = QCheckBox("Listen on all interfaces (0.0.0.0)"); self.api_all.setChecked(s.get("api_host", "127.0.0.1") == "0.0.0.0"); f.addRow(self.api_all)
+        self.api_warn = QLabel("Warning: anyone on your network can send alerts and play sounds on this PC. Set a token, and use only on trusted networks. Traffic is plain HTTP, so the token is visible on the wire."); self.api_warn.setWordWrap(True); self.api_warn.setStyleSheet("color: #E94;"); f.addRow(self.api_warn)
+        self.api_all.toggled.connect(self.api_warn.setVisible); self.api_warn.setVisible(self.api_all.isChecked())
         self.api_port = QSpinBox(); self.api_port.setRange(1024, 65535); self.api_port.setValue(int(s.get("api_port", 8765))); f.addRow("Port", self.api_port)
         self.api_token = QLineEdit(s.get("api_token", "")); self.api_token.setPlaceholderText("none (any local process can send alerts)"); f.addRow("Token", self.api_token)
         self.api_status = QLabel(); self.api_status.setWordWrap(True)
         apply = QPushButton("Apply"); apply.clicked.connect(self.apply_api); f.addRow(apply); f.addRow(self.api_status)
         help = QLabel("POST /notify with Content-Type: application/json. Fields: title, text, icon (mdi.name, emoji, file path or http URL), color (#RRGGBB or rgba()), "
+                      "sound (http URL, local file path, or base64/data: URI of wav/mp3/ogg/flac/m4a, max 5 MB, plays when the alert shows), "
                       "duration_ms, sticky (true stays until clicked), mode (marquee or expand). POST /dismiss clears the current alert. GET /health checks the server. "
                       "With a token set, send Authorization: Bearer <token>.")
         help.setWordWrap(True); help.setStyleSheet("color: #888;"); f.addRow(help)
@@ -262,12 +266,16 @@ class SettingsDialog(QDialog):
 
     def show_api_status(self):
         srv = self.island.api_server
-        if srv.running: self.api_status.setText(f"Listening on http://127.0.0.1:{self.island.settings.get('api_port', 8765)}"); self.api_status.setStyleSheet("color: #5C5;")
+        if srv.running: self.api_status.setText(f"Listening on http://{'0.0.0.0 (all interfaces)' if self.island.settings.get('api_host') == '0.0.0.0' else '127.0.0.1'}:{self.island.settings.get('api_port', 8765)}"); self.api_status.setStyleSheet("color: #5C5;")
         elif srv.error: self.api_status.setText(f"Failed to start: {srv.error}"); self.api_status.setStyleSheet("color: #E55;")
         else: self.api_status.setText("Off"); self.api_status.setStyleSheet("color: #888;")
 
     def apply_api(self):
         s = self.island.settings
+        if self.api_all.isChecked() and self.api_on.isChecked() and s.get("api_host") != "0.0.0.0":
+            msg = "This exposes the API to every device that can reach this PC." + ("" if self.api_token.text().strip() else " No token is set, so anyone can send alerts and play sounds.") + "\n\nContinue?"
+            if QMessageBox.warning(self, "Open API to network", msg, QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No) != QMessageBox.StandardButton.Yes: return
+        s["api_host"] = "0.0.0.0" if self.api_all.isChecked() else "127.0.0.1"
         s["api_enabled"] = self.api_on.isChecked(); s["api_port"] = self.api_port.value(); s["api_token"] = self.api_token.text().strip()
         self.island.save_settings(); self.island.apply_api(); self.show_api_status()
 

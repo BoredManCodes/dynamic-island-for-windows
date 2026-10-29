@@ -1,5 +1,10 @@
+import base64
 import json
+import os
+import shutil
+import tempfile
 import threading
+import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -8,8 +13,12 @@ from PyQt6.QtGui import QColor
 
 from theme import _RGBA
 
-MAX_BODY = 64 * 1024
+MAX_BODY = 8 * 1024 * 1024
 MAX_ICON_BYTES = 1024 * 1024
+MAX_SOUND_BYTES = 5 * 1024 * 1024
+SOUND_EXTS = (".wav", ".mp3", ".ogg", ".flac", ".m4a", ".aac", ".wma")
+LOCAL_HOST = "127.0.0.1"
+ALL_HOSTS = "0.0.0.0"
 MODES = ("marquee", "expand")
 
 
@@ -39,14 +48,54 @@ def parse_alert(data):
     if icon is not None:
         if not isinstance(icon, str): raise ValueError("icon must be a string")
         alert["icon"] = icon.strip()[:2000]
+    sound = data.get("sound")
+    if sound is not None:
+        if not isinstance(sound, str): raise ValueError("sound must be a string")
+        alert["sound"] = sound.strip()
     return alert
 
 
-def fetch_icon(url):
+def fetch_bytes(url, limit, timeout=3):
     req = urllib.request.Request(url, headers={"User-Agent": "DynamicIsland"})
-    with urllib.request.urlopen(req, timeout=3) as r:
-        data = r.read(MAX_ICON_BYTES + 1)
-    return data if len(data) <= MAX_ICON_BYTES else None
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        data = r.read(limit + 1)
+    return data if len(data) <= limit else None
+
+
+def fetch_icon(url): return fetch_bytes(url, MAX_ICON_BYTES)
+
+
+def sniff_sound_ext(data):
+    if data[:4] == b"RIFF": return ".wav"
+    if data[:4] == b"OggS": return ".ogg"
+    if data[:4] == b"fLaC": return ".flac"
+    if data[4:8] == b"ftyp": return ".m4a"
+    return ".mp3"
+
+
+class SoundStore:
+    def __init__(self): self.dir = None
+
+    def save(self, data, ext):
+        if self.dir is None: self.dir = tempfile.mkdtemp(prefix="dynisland_snd_")
+        fd, path = tempfile.mkstemp(suffix=ext if ext in SOUND_EXTS else sniff_sound_ext(data), dir=self.dir)
+        with os.fdopen(fd, "wb") as f: f.write(data)
+        return path
+
+    def resolve(self, spec):
+        low = spec.lower()
+        if low.startswith(("http://", "https://")):
+            data = fetch_bytes(spec, MAX_SOUND_BYTES, 8)
+            return self.save(data, os.path.splitext(urllib.parse.urlparse(spec).path)[1].lower()) if data else None
+        if low.startswith("data:"):
+            data = base64.b64decode(spec.split(",", 1)[1])
+            return self.save(data, "") if 0 < len(data) <= MAX_SOUND_BYTES else None
+        if os.path.isfile(spec) and os.path.splitext(spec)[1].lower() in SOUND_EXTS: return spec
+        data = base64.b64decode(spec, validate=True)
+        return self.save(data, "") if 0 < len(data) <= MAX_SOUND_BYTES else None
+
+    def cleanup(self):
+        if self.dir: shutil.rmtree(self.dir, ignore_errors=True); self.dir = None
 
 
 class ApiServer(QObject):
@@ -55,12 +104,12 @@ class ApiServer(QObject):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.httpd = None; self.thread = None; self.error = ""
+        self.httpd = None; self.thread = None; self.error = ""; self.sounds = SoundStore()
 
     @property
     def running(self): return self.httpd is not None
 
-    def start(self, port, token):
+    def start(self, port, token, host=LOCAL_HOST):
         self.stop(); self.error = ""
         server = self
 
@@ -89,7 +138,7 @@ class ApiServer(QObject):
                     return self.reply(415, {"ok": False, "error": "Content-Type must be application/json"})
                 try: n = int(self.headers.get("Content-Length", "0"))
                 except ValueError: n = -1
-                if not 0 <= n <= MAX_BODY: return self.reply(413, {"ok": False, "error": "body missing or over 64 KB"})
+                if not 0 <= n <= MAX_BODY: return self.reply(413, {"ok": False, "error": "body missing or over 8 MB"})
                 try: data = json.loads(self.rfile.read(n) or b"{}")
                 except ValueError: return self.reply(400, {"ok": False, "error": "invalid JSON"})
                 if self.path == "/dismiss":
@@ -100,9 +149,12 @@ class ApiServer(QObject):
                 if icon.lower().startswith(("http://", "https://")):
                     try: alert["icon_bytes"] = fetch_icon(icon)
                     except Exception: alert["icon_bytes"] = None
+                if alert.get("sound"):
+                    try: alert["sound_path"] = server.sounds.resolve(alert["sound"])
+                    except Exception: alert["sound_path"] = None
                 server.alert_received.emit(alert); self.reply(200, {"ok": True})
 
-        try: self.httpd = ThreadingHTTPServer(("127.0.0.1", int(port)), Handler)
+        try: self.httpd = ThreadingHTTPServer((ALL_HOSTS if host == ALL_HOSTS else LOCAL_HOST, int(port)), Handler)
         except OSError as e:
             self.httpd = None; self.error = str(e); return False
         self.httpd.daemon_threads = True
