@@ -1,7 +1,10 @@
+import os
+
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
+from PyQt6.QtMultimedia import QMediaDevices
 from PyQt6.QtWidgets import (QMessageBox, QDialog,QVBoxLayout, QHBoxLayout, QFormLayout, QTabWidget, QWidget,
                              QLabel, QPushButton, QComboBox, QSpinBox, QDoubleSpinBox, QCheckBox,
-                             QListWidget, QListWidgetItem, QColorDialog, QLineEdit)
+                             QListWidget, QListWidgetItem, QColorDialog, QLineEdit, QSlider)
 
 from theme import qcolor, css
 
@@ -254,6 +257,14 @@ class SettingsDialog(QDialog):
         self.api_all.toggled.connect(self.api_warn.setVisible); self.api_warn.setVisible(self.api_all.isChecked())
         self.api_port = QSpinBox(); self.api_port.setRange(1024, 65535); self.api_port.setValue(int(s.get("api_port", 8765))); f.addRow("Port", self.api_port)
         self.api_token = QLineEdit(s.get("api_token", "")); self.api_token.setPlaceholderText("none (any local process can send alerts)"); f.addRow("Token", self.api_token)
+        self.snd_dev = QComboBox(); self.snd_dev.addItem("System default", ""); cur = s.get("alert_sound_device", "")
+        for d in QMediaDevices.audioOutputs(): self.snd_dev.addItem(d.description(), bytes(d.id()).decode(errors="ignore"))
+        i = self.snd_dev.findData(cur); self.snd_dev.setCurrentIndex(max(i, 0)); f.addRow("Sound output", self.snd_dev)
+        vrow = QHBoxLayout(); self.snd_vol = QSlider(Qt.Orientation.Horizontal); self.snd_vol.setRange(0, 100); self.snd_vol.setValue(int(s.get("alert_sound_volume", 100)))
+        self.snd_vol_lbl = QLabel(f"{self.snd_vol.value()}%"); self.snd_vol_lbl.setMinimumWidth(36); test = QPushButton("Test")
+        vrow.addWidget(self.snd_vol, 1); vrow.addWidget(self.snd_vol_lbl); vrow.addWidget(test); f.addRow("Sound volume", vrow)
+        self.snd_save = QTimer(self); self.snd_save.setSingleShot(True); self.snd_save.setInterval(400); self.snd_save.timeout.connect(self.island.save_settings)
+        self.snd_dev.currentIndexChanged.connect(self.change_sound); self.snd_vol.valueChanged.connect(self.change_sound); test.clicked.connect(self.test_sound)
         self.api_status = QLabel(); self.api_status.setWordWrap(True)
         apply = QPushButton("Apply"); apply.clicked.connect(self.apply_api); f.addRow(apply); f.addRow(self.api_status)
         help = QLabel("POST /notify with Content-Type: application/json. Fields: title, text, icon (mdi.name, emoji, file path or http URL), color (#RRGGBB or rgba()), "
@@ -263,6 +274,15 @@ class SettingsDialog(QDialog):
         help.setWordWrap(True); help.setStyleSheet("color: #888;"); f.addRow(help)
         self.show_api_status()
         return w
+
+    def change_sound(self):
+        s = self.island.settings; s["alert_sound_device"] = self.snd_dev.currentData() or ""; s["alert_sound_volume"] = self.snd_vol.value()
+        self.snd_vol_lbl.setText(f"{self.snd_vol.value()}%"); self.snd_save.start()
+
+    def test_sound(self):
+        for name in ("Windows Notify System Generic.wav", "Windows Notify.wav", "tada.wav"):
+            p = os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Media", name)
+            if os.path.isfile(p): self.island.play_alert_sound(p); return
 
     def show_api_status(self):
         srv = self.island.api_server

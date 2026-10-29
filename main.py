@@ -1002,9 +1002,13 @@ class DynamicIsland(QWidget):
 
     def play_alert_sound(self, path):
         if not path or not os.path.isfile(path): return
+        from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput, QMediaDevices
         if getattr(self, "alert_player", None) is None:
-            from PyQt6.QtMultimedia import QMediaPlayer, QAudioOutput
             self.alert_player = QMediaPlayer(self); self.alert_audio = QAudioOutput(self); self.alert_player.setAudioOutput(self.alert_audio)
+        want = self.settings.get("alert_sound_device", "")
+        dev = next((d for d in QMediaDevices.audioOutputs() if bytes(d.id()).decode(errors="ignore") == want), None) or QMediaDevices.defaultAudioOutput()
+        if self.alert_audio.device().id() != dev.id(): self.alert_audio.setDevice(dev)
+        self.alert_audio.setVolume(max(0, min(100, int(self.settings.get("alert_sound_volume", 100)))) / 100)
         self.alert_player.stop(); self.alert_player.setSource(QUrl.fromLocalFile(path)); self.alert_player.play()
 
     def finish_alert(self):
